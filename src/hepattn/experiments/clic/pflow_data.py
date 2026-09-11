@@ -237,8 +237,8 @@ class CLICDataset(Dataset):
                 ],
                 -1,
             ),
-            "cosphi": torch.cat([track_cosphi, topo_phi], -1),
-            "sinphi": torch.cat([track_sinphi, topo_phi], -1),
+            "cosphi": torch.cat([track_cosphi, topo_cosphi], -1),
+            "sinphi": torch.cat([track_sinphi, topo_sinphi], -1),
             # interaction features
             "eta_int": torch.cat(
                 [
