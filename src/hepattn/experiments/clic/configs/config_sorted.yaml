@@ -1,0 +1,375 @@
+# lightning.pytorch==2.5.2
+seed_everything: 42
+trainer:
+  accelerator: gpu
+  strategy: ddp_find_unused_parameters_true
+  devices: '4'
+  num_nodes: 1
+  precision: bf16-mixed
+  logger:
+    class_path: hepattn.utils.loggers.MyCometLogger
+    init_args:
+      offline_directory: /eagle/hgcal-maskformer-fpga/akum_logs/clic_v6_sorted
+      log_env_details: true
+      api_key: null
+      workspace: null
+      project: hepattn-clic
+      experiment_key: null
+      mode: null
+      online: null
+      prefix: null
+  callbacks:
+  - class_path: hepattn.callbacks.InferenceTimer
+  - class_path: hepattn.callbacks.SaveConfig
+  - class_path: hepattn.callbacks.Checkpoint
+    init_args:
+      monitor: val/loss
+      log_model: true
+      dirpath: null
+      verbose: false
+      save_last: true
+      save_weights_only: false
+      mode: min
+      every_n_train_steps: null
+      train_time_interval: null
+      every_n_epochs: null
+      save_on_train_epoch_end: null
+      enable_version_counter: true
+  - class_path: hepattn.experiments.clic.PflowPredictionWriter
+  - class_path: lightning.pytorch.callbacks.ModelSummary
+    init_args:
+      max_depth: 1
+  - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+    init_args:
+      logging_interval: null
+      log_momentum: false
+      log_weight_decay: false
+  - class_path: lightning.pytorch.callbacks.TQDMProgressBar
+    init_args:
+      refresh_rate: 50
+      process_position: 0
+      leave: false
+  fast_dev_run: false
+  max_epochs: 200
+  min_epochs: null
+  max_steps: -1
+  min_steps: null
+  max_time: null
+  limit_train_batches: null
+  limit_val_batches: null
+  limit_test_batches: null
+  limit_predict_batches: null
+  overfit_batches: 0.0
+  val_check_interval: null
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: null
+  log_every_n_steps: 50
+  enable_checkpointing: null
+  enable_progress_bar: true
+  enable_model_summary: null
+  accumulate_grad_batches: 1
+  gradient_clip_val: 0.1
+  gradient_clip_algorithm: null
+  deterministic: null
+  benchmark: null
+  inference_mode: true
+  use_distributed_sampler: true
+  profiler: null
+  detect_anomaly: false
+  barebones: false
+  plugins: null
+  sync_batchnorm: false
+  reload_dataloaders_every_n_epochs: 0
+  default_root_dir: /eagle/hgcal-maskformer-fpga/akum_logs/clic_v6_sorted
+  model_registry: null
+model:
+  model:
+    class_path: hepattn.models.MaskFormer
+    init_args:
+      input_nets:
+        class_path: torch.nn.ModuleList
+        init_args:
+          modules:
+          - class_path: hepattn.models.InputNet
+            init_args:
+              input_name: node
+              net:
+                class_path: hepattn.models.Dense
+                init_args:
+                  input_size: 27
+                  output_size: 256
+                  hidden_layers: null
+                  hidden_dim_scale: 2
+                  activation: null
+                  final_activation: null
+                  dropout: 0.0
+                  bias: true
+              fields:
+              - features
+              posenc:
+                class_path: hepattn.models.FourierPositionEncoder
+                init_args:
+                  input_name: node
+                  dim: 256
+                  fields:
+                  - eta
+                  - phi
+                  scale: 0.1
+              input_dtype: null
+      encoder:
+        class_path: hepattn.models.Encoder
+        init_args:
+          num_layers: 6
+          dim: 256
+          attn_type: linformer
+          window_size: null
+          window_wrap: false
+          score_mod: null
+          value_residual: false
+          num_register_tokens: 8
+          attn_kwargs:
+            num_heads: 16
+          norm: LayerNorm
+          layer_scale: null
+          drop_path: 0.0
+          qkv_norm: false
+          hybrid_norm: true
+          dense_kwargs: null
+      decoder:
+        class_path: hepattn.models.MaskFormerDecoder
+        init_args:
+          num_queries: 150
+          decoder_layer_config:
+            dim: 256
+            hybrid_norm: true
+            attn_kwargs:
+              num_heads: 16
+              attn_type: linformer
+          num_decoder_layers: 4
+          mask_attention: true
+          use_query_masks: false
+          posenc: null
+          local_strided_attn: false
+          window_size: 512
+          window_wrap: true
+          fast_local_ca: false
+          block_size: 128
+          unified_decoding: false
+          phi_shift: 0.0
+          unmask_all_false: true
+          dynamic_queries: false
+          dynamic_query_source: null
+      tasks:
+        class_path: torch.nn.ModuleList
+        init_args:
+          modules:
+          - class_path: hepattn.models.task.ObjectClassificationTask
+            init_args:
+              name: classification
+              input_object: query
+              output_object: pflow
+              target_object: particle
+              losses:
+                object_ce: 2.0
+              costs:
+                object_ce: 2.0
+              net:
+                class_path: hepattn.models.Dense
+                init_args:
+                  input_size: 256
+                  output_size: 6
+                  hidden_layers:
+                  - 256
+                  - 128
+                  - 32
+                  hidden_dim_scale: 2
+                  activation:
+                    class_path: torch.nn.SiLU
+                    init_args:
+                      inplace: false
+                  final_activation: null
+                  dropout: 0.0
+                  bias: true
+              dim: null
+              num_classes: 5
+              class_weights:
+              - 1.0
+              - 3.0
+              - 8.0
+              - 1.5
+              - 1.0
+              null_weight: 0.5
+              mask_queries: false
+              has_intermediate_loss: true
+              has_first_layer_loss: false
+          - class_path: hepattn.models.task.ObjectHitMaskTask
+            init_args:
+              name: mask
+              input_constituent: node
+              input_object: query
+              output_object: pflow
+              target_object: particle
+              losses:
+                mask_bce: 5.0
+                mask_dice: 1.0
+              costs:
+                mask_dice: 1.0
+              dim: 256
+              object_net: null
+              constituent_net: null
+              null_weight: 1.0
+              mask_attn: true
+              target_field: valid
+              logit_scale: 4.0
+              pred_threshold: 0.1
+              mask_attention_threshold: null
+              has_intermediate_loss: true
+          - class_path: hepattn.models.task.IncidenceRegressionTask
+            init_args:
+              name: incidence
+              input_constituent: node
+              input_object: query
+              output_object: pflow
+              target_object: particle
+              losses:
+                kl_div: 1.0
+              costs:
+                kl_div: 1.0
+              net:
+                class_path: hepattn.models.Dense
+                init_args:
+                  input_size: 256
+                  output_size: null
+                  hidden_layers: 2
+                  hidden_dim_scale: 2
+                  activation:
+                    class_path: torch.nn.SiLU
+                    init_args:
+                      inplace: false
+                  final_activation: null
+                  dropout: 0.0
+                  bias: true
+              node_net:
+                class_path: hepattn.models.Dense
+                init_args:
+                  input_size: 256
+                  output_size: null
+                  hidden_layers: 1
+                  hidden_dim_scale: 2
+                  activation: null
+                  final_activation: null
+                  dropout: 0.0
+                  bias: true
+              has_intermediate_loss: false
+          - class_path: hepattn.models.task.IncidenceBasedRegressionTask
+            init_args:
+              name: regression
+              input_constituent: node
+              input_object: query
+              output_object: pflow
+              target_object: particle
+              fields:
+              - e
+              - pt
+              - eta
+              - sinphi
+              - cosphi
+              loss_weight: 10.0
+              cost_weight: 10.0
+              scale_dict_path: configs/clic_var_transform.yaml
+              net:
+                class_path: hepattn.models.Dense
+                init_args:
+                  input_size: 518
+                  output_size: 5
+                  hidden_layers:
+                  - 512
+                  - 256
+                  - 128
+                  - 64
+                  - 32
+                  hidden_dim_scale: 2
+                  activation:
+                    class_path: torch.nn.SiLU
+                    init_args:
+                      inplace: false
+                  final_activation: null
+                  dropout: 0.0
+                  bias: true
+              loss: l1
+              use_incidence: true
+              use_nodes: true
+              has_intermediate_loss: false
+              mode: scale
+              cost: new
+              incidence_task_name: incidence
+              class_prob_task_name: classification
+      dim: 256
+      target_object: particle
+      pooling: null
+      matcher:
+        class_path: hepattn.models.matcher.Matcher
+        init_args:
+          default_solver: scipy
+          adaptive_solver: false
+          adaptive_check_interval: 1000
+          parallel_solver: true
+          parallel_backend: thread
+          n_jobs: 16
+          verbose: false
+      input_sort_field: null
+      sorter:
+        class_path: hepattn.utils.sorter.Sorter
+        init_args:
+          input_sort_field: phi
+      unified_decoding: false
+      dynamic_query_source: hit
+      encoder_tasks: null
+  lrs_config:
+    initial: 1.0e-06
+    max: 0.0001
+    end: 1.0e-06
+    pct_start: 0.05
+    weight_decay: 0.03
+    skip_scheduler: false
+  optimizer: AdamW
+  mtl: false
+data:
+  train_path: /eagle/hgcal-maskformer-fpga/clic_data/train_clic_fix.root
+  valid_path: /eagle/hgcal-maskformer-fpga/clic_data/val_clic_fix.root
+  batch_size: 256
+  num_workers: 8
+  num_train: -1
+  num_val: 5000
+  num_test: -1
+  scale_dict_path: configs/clic_var_transform.yaml
+  test_path: /eagle/hgcal-maskformer-fpga/clic_data/test_clic_common_infer.root
+  pin_memory: true
+  test_suff: null
+  inputs:
+    hit:
+    - x
+    - y
+    - z
+    - r
+    - s
+    - theta
+    - phi
+  targets:
+    particle:
+    - e
+    - pt
+    - eta
+    - sinphi
+    - cosphi
+  num_objects: 150
+  max_nodes: 160
+  remove_wrong_idxs: true
+  incidence_cutval: 0.01
+  is_inference: false
+  dummy_data: false
+name: clic_v6_sorted
+matmul_precision: high
+optimizer: null
+lr_scheduler: null
+ckpt_path: null
