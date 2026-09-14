@@ -22,6 +22,31 @@ def do_padding(tensor, max_len):
     return x
 
 
+# Orderings for the node (track + topocluster) sequence. The default file order is
+# [tracks, topos], each in production order, so sequence position i has no stable meaning
+# across events. Quadratic attention does not care (it is permutation-equivariant; the
+# positional encoder acts on each node's own eta/phi, not its index), but Linformer's
+# projection E[n, k] is indexed by position, so it can only learn a spatial pooling if
+# position correlates with geometry. Sorting gives it that correlation.
+NODE_SORT_MODES = frozenset({"phi", "eta", "type_phi", "type_eta"})
+
+
+def node_sort_order(mode: str, is_track: torch.Tensor, phi: torch.Tensor, eta: torch.Tensor) -> torch.Tensor:
+    """Return the permutation that sorts the unpadded node sequence.
+
+    ``phi``/``eta`` sort all nodes together by that coordinate. ``type_phi``/``type_eta``
+    keep tracks before topoclusters and sort within each block. Sorts are stable, so
+    ties keep file order.
+    """
+    key = {"phi": phi, "eta": eta, "type_phi": phi, "type_eta": eta}[mode]
+    order = torch.argsort(key.double(), stable=True)
+    if mode.startswith("type_"):
+        # second stable sort on the block key: tracks (1) first, topos (0) after
+        block = (1 - is_track.double())[order]
+        order = order[torch.argsort(block, stable=True)]
+    return order
+
+
 def is_valid_file(path):
     path = Path(path)
     return path.is_file() and path.stat().st_size > 0
@@ -41,6 +66,7 @@ class CLICDataset(Dataset):
         incidence_cutval: float = 1e-4,
         is_inference: bool = False,
         dummy_data: bool = False,
+        sort_nodes_by: str | None = None,
     ):
         super().__init__()
 
@@ -68,6 +94,9 @@ class CLICDataset(Dataset):
         self.remove_wrong_idxs = remove_wrong_idxs
         self.incidence_cutval = incidence_cutval
         self.is_inference = is_inference
+        if sort_nodes_by is not None and sort_nodes_by not in NODE_SORT_MODES:
+            raise ValueError(f"sort_nodes_by must be one of {sorted(NODE_SORT_MODES)} or None, got {sort_nodes_by!r}")
+        self.sort_nodes_by = sort_nodes_by
 
         if dummy_data:
             print(f"Creating CLIC dataset with dummy data and {num_events} samples")
@@ -379,11 +408,26 @@ class CLICDataset(Dataset):
             ),
         }
 
+        # Permute every per-node tensor with one shared order; the incidence columns are
+        # permuted with the same order below, after the matrix is built in file order.
+        order = None
+        if self.sort_nodes_by is not None:
+            order = node_sort_order(
+                self.sort_nodes_by,
+                node_raw_features["is_track"],
+                node_raw_features["raw_phi"],
+                node_raw_features["raw_eta"],
+            )
+
         for key, val in node_features.items():
+            if order is not None:
+                val = val[order]
             val = do_padding(val, self.max_nodes)
             node_features[key] = val
 
         for key, val in node_raw_features.items():
+            if order is not None:
+                val = val[order]
             val = do_padding(val, self.max_nodes)
             node_raw_features[key] = val
 
@@ -455,6 +499,8 @@ class CLICDataset(Dataset):
         incidence_matrix /= np.clip(incidence_matrix.sum(axis=0, keepdims=True), a_min=1e-6, a_max=None)
 
         incidence = torch.tensor(incidence_matrix, dtype=torch.float32)
+        if order is not None:
+            incidence = incidence[:, order]
 
         incidence = torch.nn.functional.pad(incidence, (0, self.max_nodes - n_nodes, 0, 0))
         # update the indicator
