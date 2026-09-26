@@ -2,7 +2,7 @@
 # Submit a CLIC training run and record exactly what was submitted.
 #
 #   CFG=src/hepattn/experiments/clic/configs/stock_lion_polaris.yaml bash polaris/submit_train.sh
-#   SMOKE=1 CFG=... bash polaris/submit_train.sh     # 100-batch gate on the debug queue
+#   SMOKE=1 CFG=... bash polaris/submit_train.sh     # 100-batch gate, always the debug queue (SMOKE_QUEUE to change)
 #
 # Every submission creates polaris/runs/<timestamp>_<arm>[_smoke]/ holding
 #   config.yaml   byte-for-byte copy of the config; the job trains from THIS file
@@ -24,7 +24,8 @@ source "${REPO_DIR}/polaris/env.sh"
 ARM="$(basename "${CFG}" _polaris.yaml)"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 if [ "${SMOKE:-0}" = "1" ]; then
-  QUEUE="${QUEUE_DEBUG:-debug}"; WALL="00:30:00"; RUN_ID="${STAMP}_${ARM}_smoke"; JOB_NAME="clic-${ARM}-smoke"
+  # Hard-wired: env.sh is sourced above, so an env.sh QUEUE_DEBUG must not redirect a smoke.
+  QUEUE="${SMOKE_QUEUE:-debug}"; WALL="00:30:00"; RUN_ID="${STAMP}_${ARM}_smoke"; JOB_NAME="clic-${ARM}-smoke"
 else
   QUEUE="${QUEUE_PROD:-preemptable}"; WALL="${WALLTIME:-48:00:00}"; RUN_ID="${STAMP}_${ARM}"; JOB_NAME="clic-${ARM}"
 fi
