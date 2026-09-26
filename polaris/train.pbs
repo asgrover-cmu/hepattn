@@ -29,8 +29,11 @@ export PYTHONNOUSERSITE=1
 # hepattn is NOT installed into the venv (uv sync --no-install-project), so PYTHONPATH
 # alone decides which clone runs. The venv lives under WORK_ROOT, the checkout under $HOME.
 VENV_DIR="${VENV_DIR:-${WORK_ROOT}/hepattn/.venv}"
-[ -f "${VENV_DIR}/bin/activate" ] || { echo "FATAL: no venv at ${VENV_DIR}" >&2; exit 1; }
-source "${VENV_DIR}/bin/activate"
+# No `source activate`: the Polaris venv has no working activate script (found on 2026-09-22),
+# so put its bin/ first on PATH, which is all activate would do.
+[ -x "${VENV_DIR}/bin/python" ] || { echo "FATAL: no python at ${VENV_DIR}/bin/python (set VENV_DIR)" >&2; exit 1; }
+export VIRTUAL_ENV="${VENV_DIR}"
+export PATH="${VENV_DIR}/bin:${PATH}"
 export PYTHONPATH="${REPO_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
 
 # Preflight: train THIS checkout, and every data file the snapshot names must exist.

@@ -28,7 +28,7 @@ export WORK_ROOT=/eagle/hgcal-maskformer-fpga   # venv is ${WORK_ROOT}/hepattn/.
 # export PROXY=http://proxy.alcf.anl.gov:3128   # curl -sI --proxy $PROXY https://github.com
 ```
 
-`WORK_ROOT` must be whatever makes `ls -d ${WORK_ROOT}/hepattn/.venv` succeed.
+`WORK_ROOT` must make `ls ${WORK_ROOT}/hepattn/.venv/bin/python` succeed (or set `VENV_DIR` to the venv).
 Smokes always go to the `debug` queue; `DATA_ROOT` and `QUEUE_DEBUG` are no longer read.
 
 ## Preconditions (each has bitten this cluster before)
@@ -47,7 +47,7 @@ Smokes always go to the `debug` queue; `DATA_ROOT` and `QUEUE_DEBUG` are no long
 1. flash-attn check on a debug node, then `exit` so the debug slot is free:
    ```bash
    qsub -I -l select=1:ngpus=1 -l walltime=00:15:00 -l filesystems=eagle:home -A hgcal-maskformer-fpga -q debug
-   source polaris/env.sh && export PYTHONNOUSERSITE=1 && source ${WORK_ROOT}/hepattn/.venv/bin/activate
+   source polaris/env.sh && export PYTHONNOUSERSITE=1 && export PATH=${WORK_ROOT}/hepattn/.venv/bin:$PATH   # activate script is unreliable
    python -c "import torch, flash_attn; print(torch.__version__, flash_attn.__version__)"
    ```
    If it imports cleanly, `attn_type` may be switched to `flash-varlen` in both configs.
