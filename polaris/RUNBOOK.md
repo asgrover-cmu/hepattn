@@ -28,7 +28,11 @@ export WORK_ROOT=/eagle/hgcal-maskformer-fpga   # venv is ${WORK_ROOT}/hepattn/.
 # export PROXY=http://proxy.alcf.anl.gov:3128   # curl -sI --proxy $PROXY https://github.com
 ```
 
-`WORK_ROOT` must make `ls ${WORK_ROOT}/hepattn/.venv/bin/python` succeed (or set `VENV_DIR` to the venv).
+`VENV_DIR` must make `ls ${VENV_DIR}/bin/python` succeed. On this account it is the pixi env
+`/home/akum/hepattn-linformer/.pixi/envs/clic` and `WORK_ROOT` is the logs dir
+`/eagle/hgcal-maskformer-fpga/akum_logs` (used for the Comet offline dir). `env.sh` also sets
+`WALLTIME`, which **overrides** the 48h default in `submit_train.sh` -- raise it before the full
+runs if 200 epochs will not fit (Linformer took ~30 h). Smokes ignore it (30 min, debug).
 Smokes always go to the `debug` queue; `DATA_ROOT` and `QUEUE_DEBUG` are no longer read.
 
 ## Preconditions (each has bitten this cluster before)
@@ -47,7 +51,7 @@ Smokes always go to the `debug` queue; `DATA_ROOT` and `QUEUE_DEBUG` are no long
 1. flash-attn check on a debug node, then `exit` so the debug slot is free:
    ```bash
    qsub -I -l select=1:ngpus=1 -l walltime=00:15:00 -l filesystems=eagle:home -A hgcal-maskformer-fpga -q debug
-   source polaris/env.sh && export PYTHONNOUSERSITE=1 && export PATH=${WORK_ROOT}/hepattn/.venv/bin:$PATH   # activate script is unreliable
+   source polaris/env.sh && export PYTHONNOUSERSITE=1 && export PATH=${VENV_DIR:-${WORK_ROOT}/hepattn/.venv}/bin:$PATH   # pixi envs have no activate script
    python -c "import torch, flash_attn; print(torch.__version__, flash_attn.__version__)"
    ```
    If it imports cleanly, `attn_type` may be switched to `flash-varlen` in both configs.
