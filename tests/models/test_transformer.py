@@ -64,6 +64,21 @@ def test_encoderlayer_with_kwargs(input_tensor):
 
 
 # Tests for Encoder
+@pytest.mark.parametrize(("depth", "expected_post_norm"), [(0, True), (1, False)])
+def test_encoderlayer_legacy_dense_norm_placement(input_tensor, depth, expected_post_norm):
+    default = EncoderLayer(dim=128, depth=depth, hybrid_norm=True)
+    legacy = EncoderLayer(dim=128, depth=depth, hybrid_norm=True, dense_norm_placement="legacy")
+
+    assert default.dense.post_norm is not expected_post_norm
+    assert legacy.dense.post_norm is expected_post_norm
+    assert isinstance(legacy.attn.norm, nn.Identity) is (depth > 0)
+
+    # Same parameters, different norm placement, different output
+    legacy.load_state_dict(default.state_dict())
+    assert legacy(input_tensor).shape == input_tensor.shape
+    assert not torch.allclose(legacy(input_tensor), default(input_tensor))
+
+
 def test_encoder_forward(input_tensor):
     model = Encoder(num_layers=3, dim=input_tensor.shape[-1])
     output = model(input_tensor)

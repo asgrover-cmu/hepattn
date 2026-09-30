@@ -356,6 +356,9 @@ class MaskFormerDecoderLayer(nn.Module):
         bidirectional_ca: bool = True,
         qkv_norm: bool = False,
         hybrid_norm: bool = False,
+        dense_norm_placement: Literal["hybridnorm", "legacy"] = "hybridnorm",
+        query_update_order: Literal["ca_dense_sa", "ca_sa_dense"] = "ca_dense_sa",
+        self_attn_norm_kv: bool = False,
         cross_attn_mode: Literal["softmax", "kmeans"] = "softmax",
         kmeans_kwargs: dict | None = None,
     ) -> None:
@@ -370,15 +373,30 @@ class MaskFormerDecoderLayer(nn.Module):
             bidirectional_ca: Enable bidirectional cross-attention.
             qkv_norm: Apply normalization to QKV in attention.
             hybrid_norm: Enable hybrid normalization from 2503.04598.
+            dense_norm_placement: Where the dense layers' norm goes, see get_hybrid_norm_config.
+            query_update_order: Order of the query updates. "ca_dense_sa" runs cross-attention, then the dense layer,
+                then self-attention. "ca_sa_dense" runs self-attention before the dense layer, the order the model
+                used at the clic-paper tag.
+            self_attn_norm_kv: Whether the query self-attention also takes its keys and values from the normalized
+                queries. By default only the queries pass through the pre-attention norm and the keys and values are
+                the un-normalized queries; the model at the clic-paper tag normalized all three.
             cross_attn_mode: "softmax" (standard attention) or "kmeans" (kMaX-style hard assignment update).
             kmeans_kwargs: Optional kwargs passed to KMeansCrossAttention when cross_attn_mode="kmeans".
+
+        Raises:
+            ValueError: If query_update_order is not a known order.
         """
         super().__init__()
+        if query_update_order not in {"ca_dense_sa", "ca_sa_dense"}:
+            raise ValueError(f"Unsupported query_update_order: {query_update_order}. Must be 'ca_dense_sa' or 'ca_sa_dense'.")
+
         self.dim = dim
         self.bidirectional_ca = bidirectional_ca
         self.cross_attn_mode = cross_attn_mode
+        self.query_update_order = query_update_order
+        self.self_attn_norm_kv = self_attn_norm_kv
 
-        attn_norm, dense_post_norm, qkv_norm = get_hybrid_norm_config(norm, depth, hybrid_norm, qkv_norm)
+        attn_norm, dense_post_norm, qkv_norm = get_hybrid_norm_config(norm, depth, hybrid_norm, qkv_norm, dense_norm_placement)
 
         attn_kwargs = attn_kwargs or {}
         self.attn_type = attn_kwargs.get("attn_type", "torch")
@@ -443,8 +461,12 @@ class MaskFormerDecoderLayer(nn.Module):
         else:
             q = self.q_ca(q_pe, k=kv_pe, v=kv, attn_mask=attn_mask, q_mask=q_mask, kv_mask=kv_mask)
 
-        q = self.q_dense(q)
-        q = self.q_sa(q, k=q, v=q, q_mask=q_mask)
+        if self.query_update_order == "ca_sa_dense":
+            q = self._query_self_attn(q, q_mask)
+            q = self.q_dense(q)
+        else:
+            q = self.q_dense(q)
+            q = self._query_self_attn(q, q_mask)
 
         # Update key/constituent embeddings with the query/object embeddings
         if self.bidirectional_ca:
@@ -460,6 +482,12 @@ class MaskFormerDecoderLayer(nn.Module):
             kv = self.kv_dense(kv)
 
         return q, kv
+
+    def _query_self_attn(self, q: Tensor, q_mask: Tensor | None) -> Tensor:
+        # Without k and v the attention takes both from its (normalized) input
+        if self.self_attn_norm_kv:
+            return self.q_sa(q, q_mask=q_mask)
+        return self.q_sa(q, k=q, v=q, q_mask=q_mask)
 
     def set_backend(self, attn_type: str) -> None:
         """Set the backend for the attention layers.

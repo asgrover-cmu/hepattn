@@ -111,6 +111,42 @@ def test_get_hybrid_norm_config_with_qkv_norm():
     assert qkv_norm is True
 
 
+@pytest.mark.parametrize(
+    ("depth", "hybrid_norm", "expected_attn_norm", "expected_dense_post_norm"),
+    [
+        (0, True, "LayerNorm", True),
+        (1, True, None, False),
+        (0, False, "LayerNorm", True),
+        (1, False, "LayerNorm", True),
+    ],
+)
+def test_get_hybrid_norm_config_legacy(depth, hybrid_norm, expected_attn_norm, expected_dense_post_norm):
+    """Test the legacy dense norm placement, which inverts the HybridNorm dense placement."""
+    attn_norm, dense_post_norm, qkv_norm = get_hybrid_norm_config(
+        norm="LayerNorm", depth=depth, hybrid_norm=hybrid_norm, qkv_norm=False, dense_norm_placement="legacy"
+    )
+
+    assert attn_norm == expected_attn_norm
+    assert dense_post_norm is expected_dense_post_norm
+    assert qkv_norm is hybrid_norm
+
+
+@pytest.mark.parametrize("depth", [0, 1])
+@pytest.mark.parametrize("hybrid_norm", [True, False])
+def test_get_hybrid_norm_config_default_is_hybridnorm(depth, hybrid_norm):
+    """Test that the default dense norm placement is the HybridNorm one."""
+    default = get_hybrid_norm_config(norm="LayerNorm", depth=depth, hybrid_norm=hybrid_norm, qkv_norm=False)
+    explicit = get_hybrid_norm_config(norm="LayerNorm", depth=depth, hybrid_norm=hybrid_norm, qkv_norm=False, dense_norm_placement="hybridnorm")
+
+    assert default == explicit
+
+
+def test_get_hybrid_norm_config_unknown_placement():
+    """Test that an unknown dense norm placement is rejected."""
+    with pytest.raises(ValueError, match="dense_norm_placement"):
+        get_hybrid_norm_config(norm="LayerNorm", depth=0, hybrid_norm=True, qkv_norm=False, dense_norm_placement="post")  # ty: ignore[invalid-argument-type]
+
+
 def test_norms_with_different_dtypes():
     """Test that norms preserve dtype for float16."""
     x_fp16 = torch.randn(2, 10, 64, dtype=torch.float16)

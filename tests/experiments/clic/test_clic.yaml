@@ -92,6 +92,7 @@ model:
                   init_args:
                     input_size: 27
                     output_size: *dim
+                    activation: SwiGLU
                 posenc:
                   class_path: hepattn.models.posenc.FourierPositionEncoder
                   init_args:
@@ -106,11 +107,15 @@ model:
           num_layers: 2
           dim: *dim
           attn_type: torch
+          norm: FastLayerNorm
           hybrid_norm: true
+          dense_norm_placement: legacy
           value_residual: true
           num_register_tokens: 8
           attn_kwargs:
             num_heads: 16
+          dense_kwargs:
+            activation: SwiGLU
 
       decoder:
         num_decoder_layers: 2
@@ -119,9 +124,15 @@ model:
         use_query_masks: false
         decoder_layer_config:
           dim: *dim
+          norm: FastLayerNorm
           hybrid_norm: true
+          dense_norm_placement: legacy
+          query_update_order: ca_sa_dense
+          self_attn_norm_kv: true
           attn_kwargs:
             num_heads: 16
+          dense_kwargs:
+            activation: SwiGLU
 
       matcher:
         class_path: hepattn.models.matcher.Matcher
@@ -157,6 +168,7 @@ model:
                 class_weights: [1.0, 3.0, 8.0, 1.5, 1.0]
                 mask_queries: false
                 has_intermediate_loss: true
+                has_first_layer_loss: true
 
             - class_path: hepattn.models.task.ObjectHitMaskTask
               init_args:
@@ -174,6 +186,16 @@ model:
                   # mask_bce: 5.0
                   mask_dice: 1.0
                 dim: *dim
+                object_net:
+                  class_path: hepattn.models.Dense
+                  init_args:
+                    input_size: *dim
+                    activation: SwiGLU
+                constituent_net:
+                  class_path: hepattn.models.Dense
+                  init_args:
+                    input_size: *dim
+                    activation: SwiGLU
                 null_weight: 1.0
                 has_intermediate_loss: true
 
@@ -193,12 +215,13 @@ model:
                   init_args:
                     input_size: *dim
                     activation: torch.nn.SiLU
-                    hidden_layers: 2
+                    hidden_layers: [*dim, *dim]
                 node_net:
                   class_path: hepattn.models.Dense
                   init_args:
                     input_size: *dim
-                    hidden_layers: 1
+                    activation: SwiGLU
+                    hidden_layers: [*dim]
                 has_intermediate_loss: false
 
             - class_path: hepattn.models.task.IncidenceBasedRegressionTask

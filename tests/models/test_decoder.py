@@ -595,6 +595,73 @@ class TestMaskFormerDecoderLayer:
         # Without bidirectional, kv should remain unchanged
         assert new_kv is kv
 
+    @staticmethod
+    def _query_update(layer, q, kv, attn_mask, order, norm_kv=False):
+        """Run the layer's query update sub-blocks by hand in the given order."""
+        q = layer.q_ca(q, k=kv, v=kv, attn_mask=attn_mask)
+        for block in order:
+            if block == "dense":
+                q = layer.q_dense(q)
+            elif norm_kv:
+                q = layer.q_sa(q, q_mask=None)
+            else:
+                q = layer.q_sa(q, k=q, v=q, q_mask=None)
+        return q
+
+    @pytest.mark.parametrize("hybrid_norm", [True, False])
+    @pytest.mark.parametrize("depth", [0, 1])
+    def test_default_query_update(self, sample_data, hybrid_norm, depth):
+        """Test that by default the queries are updated by cross-attention, the dense layer, then self-attention."""
+        torch.manual_seed(0)
+        q, kv, _, _ = sample_data
+        layer = MaskFormerDecoderLayer(dim=DIM, depth=depth, hybrid_norm=hybrid_norm, bidirectional_ca=False)
+
+        new_q, _ = layer(q, kv)
+
+        torch.testing.assert_close(new_q, self._query_update(layer, q, kv, None, ["dense", "sa"]), rtol=0, atol=0)
+
+    @pytest.mark.parametrize("hybrid_norm", [True, False])
+    @pytest.mark.parametrize("depth", [0, 1])
+    def test_query_update_order_ca_sa_dense(self, sample_data, hybrid_norm, depth):
+        """Test that ca_sa_dense runs self-attention before the dense layer."""
+        torch.manual_seed(0)
+        q, kv, _, _ = sample_data
+        layer = MaskFormerDecoderLayer(dim=DIM, depth=depth, hybrid_norm=hybrid_norm, bidirectional_ca=False, query_update_order="ca_sa_dense")
+
+        new_q, _ = layer(q, kv)
+
+        torch.testing.assert_close(new_q, self._query_update(layer, q, kv, None, ["sa", "dense"]), rtol=0, atol=0)
+        assert not torch.allclose(new_q, self._query_update(layer, q, kv, None, ["dense", "sa"]))
+
+    def test_query_update_order_unknown(self):
+        """Test that an unknown query update order is rejected."""
+        with pytest.raises(ValueError, match="query_update_order"):
+            MaskFormerDecoderLayer(dim=DIM, query_update_order="sa_ca_dense")  # ty: ignore[invalid-argument-type]
+
+    def test_self_attn_norm_kv(self, sample_data):
+        """Test that self_attn_norm_kv takes the self-attention keys and values from the normalized queries."""
+        torch.manual_seed(0)
+        q, kv, _, _ = sample_data
+        layer = MaskFormerDecoderLayer(dim=DIM, bidirectional_ca=False, self_attn_norm_kv=True)
+        assert not isinstance(layer.q_sa.norm, nn.Identity)
+
+        new_q, _ = layer(q, kv)
+
+        torch.testing.assert_close(new_q, self._query_update(layer, q, kv, None, ["dense", "sa"], norm_kv=True), rtol=0, atol=0)
+        assert not torch.allclose(new_q, self._query_update(layer, q, kv, None, ["dense", "sa"]))
+
+    @pytest.mark.parametrize(("depth", "expected_post_norm"), [(0, True), (1, False)])
+    def test_legacy_dense_norm_placement(self, depth, expected_post_norm):
+        """Test that the legacy placement inverts which layers post-norm their dense layers under HybridNorm."""
+        default = MaskFormerDecoderLayer(dim=DIM, depth=depth, hybrid_norm=True)
+        legacy = MaskFormerDecoderLayer(dim=DIM, depth=depth, hybrid_norm=True, dense_norm_placement="legacy")
+
+        assert default.q_dense.post_norm is not expected_post_norm
+        assert default.kv_dense.post_norm is not expected_post_norm
+        assert legacy.q_dense.post_norm is expected_post_norm
+        assert legacy.kv_dense.post_norm is expected_post_norm
+        assert isinstance(legacy.q_sa.norm, nn.Identity) is (depth > 0)
+
     def test_forward_kmeans_uses_logits_argument(self, monkeypatch, sample_data):
         q, kv, _, _ = sample_data
         layer = MaskFormerDecoderLayer(dim=DIM, bidirectional_ca=False, cross_attn_mode="kmeans")

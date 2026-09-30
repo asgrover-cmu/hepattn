@@ -1,3 +1,5 @@
+from typing import Literal
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -63,7 +65,9 @@ class DyT(nn.Module):
         return x * self.weight + self.bias
 
 
-def get_hybrid_norm_config(norm: str | None, depth: int, hybrid_norm: bool, qkv_norm: bool) -> tuple[str | None, bool, bool]:
+def get_hybrid_norm_config(
+    norm: str | None, depth: int, hybrid_norm: bool, qkv_norm: bool, dense_norm_placement: Literal["hybridnorm", "legacy"] = "hybridnorm"
+) -> tuple[str | None, bool, bool]:
     """Get the normalization configuration for HybridNorm.
 
     Args:
@@ -71,16 +75,26 @@ def get_hybrid_norm_config(norm: str | None, depth: int, hybrid_norm: bool, qkv_
         depth: The layer depth.
         hybrid_norm: Whether to use HybridNorm.
         qkv_norm: Whether to use QKV normalization.
+        dense_norm_placement: Where the dense layer's norm goes. "hybridnorm" follows 2503.04598: pre-norm in the
+            first layer and post-norm in the layers after it. "legacy" is the placement the model used at the
+            clic-paper tag, the other way round: post-norm in the first layer (and in every layer without
+            hybrid_norm), pre-norm in the layers after it.
 
     Returns:
         attn_norm: The normalization to use before attention.
         dense_post_norm: Whether to use post-normalization for the dense layer.
         qkv_norm: Whether to use QKV normalization.
+
+    Raises:
+        ValueError: If dense_norm_placement is not a known placement.
     """
+    if dense_norm_placement not in {"hybridnorm", "legacy"}:
+        raise ValueError(f"Unsupported dense_norm_placement: {dense_norm_placement}. Must be 'hybridnorm' or 'legacy'.")
+
     qkv_norm = qkv_norm or hybrid_norm
     is_hybrid_subsequent = hybrid_norm and depth > 0
     attn_norm = None if is_hybrid_subsequent else norm
-    dense_post_norm = is_hybrid_subsequent
+    dense_post_norm = is_hybrid_subsequent if dense_norm_placement == "hybridnorm" else not is_hybrid_subsequent
 
     return attn_norm, dense_post_norm, qkv_norm
 
