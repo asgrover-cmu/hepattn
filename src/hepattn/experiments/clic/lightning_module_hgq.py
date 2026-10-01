@@ -32,6 +32,58 @@ class MPflowHGQ(MPflow):
       (see KerasMaskFormer.move_keras_variables_to).
     """
 
+    def __init__(
+        self,
+        name: str,
+        model: KerasMaskFormer,
+        lrs_config: dict,
+        optimizer: str = "AdamW",
+        mtl: bool = False,
+        quantizer_grad_clip: str = "global",
+    ):
+        """quantizer_grad_clip: how Trainer(gradient_clip_val=...) treats the quantizer group.
+
+        "global" (default, the historical behaviour): one norm over every parameter. The
+        weight gradients (norm ~400-1100 on CLIC) set the clip factor (~1e-4 at 0.1), which
+        pushes the bitwidth gradients (~1e-8..1e-6) far below AdamW's eps, so bitwidths
+        effectively never update. "separate": the weight group and the quantizer group are
+        each clipped to gradient_clip_val by their OWN norm, so weight clipping is
+        unchanged and bitwidths keep AdamW-sized steps.
+
+        Raises:
+            ValueError: If quantizer_grad_clip is not "global" or "separate".
+        """
+        super().__init__(name, model, lrs_config, optimizer, mtl)
+        if quantizer_grad_clip not in {"global", "separate"}:
+            raise ValueError(f"quantizer_grad_clip must be 'global' or 'separate', got {quantizer_grad_clip!r}")
+        self.quantizer_grad_clip = quantizer_grad_clip
+        # per-group gradient norms before/after clipping, last step (set track_clip_stats)
+        self.track_clip_stats = False
+        self.clip_stats: dict[str, float] = {}
+
+    def configure_gradient_clipping(self, optimizer, gradient_clip_val=None, gradient_clip_algorithm=None) -> None:
+        groups = optimizer.param_groups
+
+        def norms(tag):
+            if self.track_clip_stats:
+                for gi, g in enumerate(groups):
+                    gs = [p.grad for p in g["params"] if p.grad is not None]
+                    per_tensor = [torch.linalg.vector_norm(x.float()) for x in gs]
+                    self.clip_stats[f"g{gi}_norm_{tag}"] = float(torch.linalg.vector_norm(torch.stack(per_tensor))) if gs else 0.0
+                    self.clip_stats[f"g{gi}_absmax_{tag}"] = float(max(x.abs().max() for x in gs)) if gs else 0.0
+
+        norms("pre")
+        if self.quantizer_grad_clip == "global" or gradient_clip_val is None:
+            super().configure_gradient_clipping(optimizer, gradient_clip_val, gradient_clip_algorithm)
+        else:
+            if gradient_clip_algorithm not in {None, "norm"}:
+                raise ValueError("quantizer_grad_clip='separate' supports gradient_clip_algorithm='norm' only")
+            for g in groups:
+                params = [p for p in g["params"] if p.grad is not None]
+                if params:
+                    torch.nn.utils.clip_grad_norm_(params, gradient_clip_val)
+        norms("post")
+
     def setup(self, stage: str) -> None:
         super().setup(stage)
         assert isinstance(self.model, KerasMaskFormer), "MPflowHGQ requires a KerasMaskFormer model"
