@@ -861,7 +861,7 @@ clic = [
 fa2 = [{ name = "flash-attn", url = "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.4.17/flash_attn-2.8.3%2Bcu128torch2.9-cp312-cp312-linux_x86_64.whl" }]
 hgq = [
     { name = "da4ml", marker = "platform_machine != 'aarch64'", specifier = ">=0.6" },
-    { name = "hgq2", specifier = ">=0.1.9,<0.2" },
+    { name = "hgq2", git = "https://github.com/helenllii/HGQ2.git?rev=4235490f6f01cbbddc627a57b4b29c8e9ab1c91e" },
     { name = "hls4ml", specifier = ">=1.2.0,<2" },
     { name = "keras", specifier = ">=3.8,<4" },
 ]
@@ -878,16 +878,12 @@ wheels = [
 
 [[package]]
 name = "hgq2"
-version = "0.1.9"
-source = { registry = "https://pypi.org/simple" }
+version = "0.1.dev318+g4235490f6"
+source = { git = "https://github.com/helenllii/HGQ2.git?rev=4235490f6f01cbbddc627a57b4b29c8e9ab1c91e#4235490f6f01cbbddc627a57b4b29c8e9ab1c91e" }
 dependencies = [
     { name = "keras" },
     { name = "quantizers" },
     { name = "tqdm" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/f8/39b61fc409aaf9918ab0800d8ce489918cf9a93473b69bdcdfc46b91722e/hgq2-0.1.9.tar.gz", hash = "sha256:865970ae20f97edd6ea69246a2beb66ad1cfce31a40e9599c92f8ef6e61ad4ad", size = 201325, upload-time = "2026-05-27T21:38:23.828Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b4/c7/4c7b7dd5707a421a4aef17d0d5ba74d0304f426f5abd78ea8aef541eef4b/hgq2-0.1.9-py3-none-any.whl", hash = "sha256:749754214b97f2531e1f8e609308755fe857064f47d350e9ffb878fb5017c43c", size = 111432, upload-time = "2026-05-27T21:38:22.405Z" },
 ]
 
 [[package]]
