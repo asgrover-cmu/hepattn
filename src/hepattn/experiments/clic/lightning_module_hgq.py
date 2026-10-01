@@ -4,6 +4,8 @@ Kept separate from lightning_module.py so torch-only runs never import keras
 (importing keras pins its backend process-wide).
 """
 
+import os
+
 import torch
 from lion_pytorch import Lion
 from torch import Tensor
@@ -12,6 +14,46 @@ from torch.optim import AdamW
 from hepattn.experiments.clic.lightning_module import MPflow
 from hepattn.keras import set_keras_default_device
 from hepattn.keras.maskformer import KerasMaskFormer
+
+# Recompile budget per compiled HGQ2 function. The decoder-scope CLIC model needs up to 13 cache
+# entries for one function (one per distinct quantizer shape/rank); past torch's default of 8,
+# dynamo silently runs the remaining call sites eagerly.
+HGQ_COMPILE_RECOMPILE_LIMIT = 256
+
+
+def enable_hgq_train_compile() -> None:
+    """Compile HGQ2's training-mode quantizer functions (HGQ2's own set_train_compile).
+
+    Needs the HGQ2 build pinned in pyproject.toml, which provides
+    hgq.quantizer.internal.fixed_point_quantizer.set_train_compile. HGQ2 still owns the
+    quantization code; only its pure per-quantizer functions run through torch.compile, and
+    the quantizer state is still assigned eagerly by HGQ2.
+
+    Process-wide effects:
+    - torch._dynamo's recompile limits are raised to HGQ_COMPILE_RECOMPILE_LIMIT;
+    - hepattn's torch.compile-wrapped loss / matching-cost functions are unwrapped to run
+      eagerly. That is how the HGQ runs already execute them (their launchers set
+      TORCHDYNAMO_DISABLE=1) and how this path was benchmarked and parity-checked.
+
+    Raises:
+        RuntimeError: If TORCHDYNAMO_DISABLE is set (torch.compile would be a silent no-op).
+        ImportError: If the installed HGQ2 does not provide set_train_compile.
+    """
+    if os.environ.get("TORCHDYNAMO_DISABLE", "0") not in {"", "0"}:
+        raise RuntimeError("hgq_train_compile=True needs torch.compile, but TORCHDYNAMO_DISABLE is set; unset it in the launcher")
+    from hgq.quantizer.internal import fixed_point_quantizer as fpq  # noqa: PLC0415
+
+    if not hasattr(fpq, "set_train_compile"):
+        raise ImportError(f"hgq_train_compile=True needs the HGQ2 build pinned in pyproject.toml (no set_train_compile in {fpq.__file__})")
+    from hepattn.models import loss as loss_mod  # noqa: PLC0415
+
+    for table in (loss_mod.cost_fns, loss_mod.loss_fns):
+        for key, fn in table.items():
+            table[key] = getattr(fn, "_torchdynamo_orig_callable", fn)
+    cfg = torch._dynamo.config  # noqa: SLF001
+    cfg.recompile_limit = max(cfg.recompile_limit, HGQ_COMPILE_RECOMPILE_LIMIT)
+    cfg.accumulated_recompile_limit = max(cfg.accumulated_recompile_limit, 8 * HGQ_COMPILE_RECOMPILE_LIMIT)
+    fpq.set_train_compile(True)
 
 
 class MPflowHGQ(MPflow):
@@ -40,6 +82,7 @@ class MPflowHGQ(MPflow):
         optimizer: str = "AdamW",
         mtl: bool = False,
         quantizer_grad_clip: str = "global",
+        hgq_train_compile: bool = False,
     ):
         """quantizer_grad_clip: how Trainer(gradient_clip_val=...) treats the quantizer group.
 
@@ -50,6 +93,12 @@ class MPflowHGQ(MPflow):
         each clipped to gradient_clip_val by their OWN norm, so weight clipping is
         unchanged and bitwidths keep AdamW-sized steps.
 
+        hgq_train_compile: compile HGQ2's training-mode quantizer functions with
+        torch.compile (see enable_hgq_train_compile). Numerically identical to eager HGQ2
+        (outputs, losses and state bit-identical; gradients within ~1e-7); on the CLIC
+        decoder-scope model at batch 32 it measured 1.65x the step rate and 0.44x the peak
+        memory. Requires the pinned HGQ2 build and TORCHDYNAMO_DISABLE unset. Default off.
+
         Raises:
             ValueError: If quantizer_grad_clip is not "global" or "separate".
         """
@@ -57,6 +106,7 @@ class MPflowHGQ(MPflow):
         if quantizer_grad_clip not in {"global", "separate"}:
             raise ValueError(f"quantizer_grad_clip must be 'global' or 'separate', got {quantizer_grad_clip!r}")
         self.quantizer_grad_clip = quantizer_grad_clip
+        self.hgq_train_compile = hgq_train_compile
         # per-group gradient norms before/after clipping, last step (set track_clip_stats)
         self.track_clip_stats = False
         self.clip_stats: dict[str, float] = {}
@@ -87,6 +137,8 @@ class MPflowHGQ(MPflow):
     def setup(self, stage: str) -> None:
         super().setup(stage)
         assert isinstance(self.model, KerasMaskFormer), "MPflowHGQ requires a KerasMaskFormer model"
+        if self.hgq_train_compile:
+            enable_hgq_train_compile()
         # Create keras variables on the RANK'S device, not cpu.
         #
         # The old comment here said variables are "created on cpu and moved with the module

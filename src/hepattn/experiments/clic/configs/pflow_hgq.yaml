@@ -92,6 +92,9 @@ model:
     weight_decay: 1e-4
     skip_scheduler: false
   mtl: false
+  # Compile HGQ2's training-mode quantizer functions (needs the pinned HGQ2 build, and the
+  # launcher must NOT set TORCHDYNAMO_DISABLE). Same numerics as eager; ~1.65x step rate.
+  hgq_train_compile: false
   model:
     class_path: hepattn.keras.maskformer.KerasMaskFormer
     init_args:

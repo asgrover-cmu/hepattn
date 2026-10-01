@@ -46,7 +46,9 @@ clic = ["pathos", "vector", "fastjet", "energyflow"] # has problems on isambard
 tide = ["numba>=0.61.2"] # has problems on isambard
 hgq = [
     "keras>=3.8,<4",
-    "hgq2>=0.1.9,<0.2",
+    # HGQ2 0.1.9 + 5 training-throughput commits (branch perf/train-compile of helenllii/HGQ2):
+    # numerically identical to 0.1.9, adds set_train_compile() used by MPflowHGQ(hgq_train_compile=True)
+    "hgq2 @ git+https://github.com/helenllii/HGQ2.git@4235490f6f01cbbddc627a57b4b29c8e9ab1c91e",
     "hls4ml>=1.2.0,<2",
     # no linux-aarch64 wheels; only needed for the hls4ml/FPGA conversion step
     "da4ml>=0.6; platform_machine != 'aarch64'",
