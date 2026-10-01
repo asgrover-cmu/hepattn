@@ -39,6 +39,7 @@ dependencies = [
     "atlas-ftag-tools>=0.2.9,<0.3",
     "ty>=0.0.1a20,<0.0.1a21",
     "lapx>=0.9.2,<0.10",
+    "masked-linformer @ https://github.com/compressed-maskformer-reco/masked-linformer/archive/dce2e151e9d25cefd85454b3dffd5c83ec217097.tar.gz",
 ]
 
 [dependency-groups]

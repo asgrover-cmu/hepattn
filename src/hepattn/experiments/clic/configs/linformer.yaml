@@ -1,0 +1,31 @@
+# Overlay on base.yaml: masked-linformer in every attention, constituents ordered by phi (padding last).
+# The decoder's mask attention is exact per query (masked_linformer.attend).
+name: clic_linformer_phi
+
+model:
+  model:
+    init_args:
+      input_sort_field: phi
+      encoder:
+        init_args:
+          attn_type: linformer
+          attn_kwargs:
+            num_heads: 16
+            linformer_seq_len: 168 # data.max_nodes (160) + num_register_tokens (8)
+            linformer_k: 64
+      decoder:
+        # a dict, so an overlay replaces it whole: the rest is base.yaml's
+        decoder_layer_config:
+          dim: 256
+          norm: FastLayerNorm
+          hybrid_norm: true
+          dense_norm_placement: legacy
+          query_update_order: ca_sa_dense
+          self_attn_norm_kv: true
+          attn_kwargs:
+            attn_type: linformer
+            num_heads: 16
+            linformer_seq_len: 160 # the longest key axis: constituents (160) > queries (150)
+            linformer_k: 64
+          dense_kwargs:
+            activation: SwiGLU

@@ -313,6 +313,7 @@ class MaskFormerDecoder(nn.Module):
                 key_posenc=x["key_posenc"] if self.posenc else None,
                 attn_mask_transpose=attn_mask_transpose,
                 logits=logits,
+                kv_sort_idx=x.get("key_sort_idx"),
             )
 
             # update the individual input constituent representations only if not in merged input mode
@@ -428,6 +429,7 @@ class MaskFormerDecoderLayer(nn.Module):
         key_posenc: Tensor | None = None,
         attn_mask_transpose: Tensor | None = None,
         logits: Tensor | None = None,
+        kv_sort_idx: Tensor | None = None,
     ) -> tuple[Tensor, Tensor]:
         """Forward pass for the decoder layer.
 
@@ -441,6 +443,7 @@ class MaskFormerDecoderLayer(nn.Module):
             key_posenc: Optional key positional encoding.
             attn_mask_transpose: Optional transposed attention mask for flex attention.
             logits: If cross_attn_mode="kmeans", dense logits (B, N, M).
+            kv_sort_idx: Optional (B, M) order of the key/value constituents, used by linformer cross-attention.
 
         Returns:
             tuple[Tensor, Tensor]: Updated (q, kv).
@@ -459,7 +462,7 @@ class MaskFormerDecoderLayer(nn.Module):
                 logits=logits,
             )
         else:
-            q = self.q_ca(q_pe, k=kv_pe, v=kv, attn_mask=attn_mask, q_mask=q_mask, kv_mask=kv_mask)
+            q = self.q_ca(q_pe, k=kv_pe, v=kv, attn_mask=attn_mask, q_mask=q_mask, kv_mask=kv_mask, kv_sort_idx=kv_sort_idx)
 
         if self.query_update_order == "ca_sa_dense":
             q = self._query_self_attn(q, q_mask)
