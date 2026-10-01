@@ -12,7 +12,8 @@ YAML/jsonargparse instantiation site) is what makes the config mechanism robust 
 instantiation order.
 """
 
-from collections.abc import Iterator
+import re
+from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -46,6 +47,9 @@ class QuantSpec:
     ebops: dict[str, Any] = field(default_factory=dict)
 
 
+# registered so keras can deserialize them (deepcopy of a mixed float/HGQ2 model goes through
+# get_config/from_config, e.g. in Lightning save_hyperparameters)
+@keras.saving.register_keras_serializable(package="hepattn")
 class EinsumOp(keras.layers.Layer):
     """Float twin of hgq.layers.QEinsum: a fixed-equation einsum over a list of inputs."""
 
@@ -60,6 +64,7 @@ class EinsumOp(keras.layers.Layer):
         return {**super().get_config(), "equation": self.equation}
 
 
+@keras.saving.register_keras_serializable(package="hepattn")
 class SoftmaxOp(keras.layers.Layer):
     """Float twin of hgq.layers.QSoftmax with optional boolean masking.
 
@@ -96,14 +101,36 @@ class LayerFactory:
             form, as it appears in YAML) for the HGQ2 quantized model.
     """
 
-    def __init__(self, quant: QuantSpec | dict[str, Any] | None = None):
+    def __init__(self, quant: QuantSpec | dict[str, Any] | None = None, quant_scope: Sequence[str] | None = None):
+        """Args:
+        quant: see class docstring.
+        quant_scope: optional regexes over layer names. When given, only leaves whose
+            name fully matches one of them are built as HGQ2 layers; every other leaf
+            is its float twin on the identical graph. None quantizes every leaf.
+        """
         if isinstance(quant, dict):
             quant = QuantSpec(**quant)
         self.quant = quant
+        self.quant_scope = None if quant_scope is None else [re.compile(p) for p in quant_scope]
 
     @property
     def quantize(self) -> bool:
+        """True if this factory can emit ANY quantized leaf (selects lazy build / weight porting)."""
         return self.quant is not None
+
+    def quantizes(self, name: str | None) -> bool:
+        """Whether the leaf with this layer name is built as an HGQ2 layer.
+
+        Raises:
+            ValueError: If a quant_scope is set and the leaf is unnamed (it could not be selected).
+        """
+        if self.quant is None:
+            return False
+        if self.quant_scope is None:
+            return True
+        if name is None:
+            raise ValueError("quant_scope selects leaves by name; every factory-built layer must be named")
+        return any(p.fullmatch(name) for p in self.quant_scope)
 
     @contextmanager
     def scopes(self) -> Iterator[None]:
@@ -122,17 +149,17 @@ class LayerFactory:
             yield
 
     def dense(self, units: int, activation: str | None = None, use_bias: bool = True, name: str | None = None) -> keras.layers.Layer:
-        if self.quantize:
+        if self.quantizes(name):
             return QDense(units, activation=activation, use_bias=use_bias, name=name)
         return keras.layers.Dense(units, activation=activation, use_bias=use_bias, name=name)
 
     def einsum(self, equation: str, name: str | None = None) -> keras.layers.Layer:
-        if self.quantize:
+        if self.quantizes(name):
             return QEinsum(equation, name=name)
         return EinsumOp(equation, name=name)
 
     def softmax(self, axis: int = -1, name: str | None = None) -> keras.layers.Layer:
-        if self.quantize:
+        if self.quantizes(name):
             return QSoftmax(axis=axis, name=name)
         return SoftmaxOp(axis=axis, name=name)
 

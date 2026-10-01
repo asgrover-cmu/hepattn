@@ -20,6 +20,57 @@ from hepattn.keras.factory import LayerFactory
 from hepattn.keras.tasks import kerasify_module
 from hepattn.models.maskformer import MaskFormer
 
+# Layer-name regexes for quantization ablations (see resolve_quant_scope). Names are the
+# deterministic keras names the hepattn.keras modules assign: innet<i>_*, encoder_l<i>_*,
+# decoder_l<i>_{q_ca,q_sa,kv_ca}_<leaf>, decoder_l<i>_{q,kv}_ffn_*, task<i>_*.
+_ENC = r"(innet\d+|encoder_l\d+)_.*"
+_DEC_ATTN = r"decoder_l\d+_(q_ca|q_sa|kv_ca)_"
+_DEC_STAGE_GROUPS = {
+    # A: decoder feed-forward nets and the attention output projections
+    "A": [r"decoder_l\d+_(q|kv)_ffn_.*", _DEC_ATTN + r"(out_proj|to_out)"],
+    # B: Q/K/V projections (incl. the linformer sequence projections of K and V)
+    "B": [_DEC_ATTN + r"(q_proj|k_proj|v_proj|to_q|to_k|to_v|seqproj_k|seqproj_v)"],
+    # C: the two attention contractions, QK^T and attn @ V
+    "C": [_DEC_ATTN + r"(scores|values)"],
+    # D: the attention softmax
+    "D": [_DEC_ATTN + r"softmax"],
+    # E: mask-logit path that feeds the next layer's attention mask (task "mask")
+    "E": [r"{mask}_.*"],
+    # F: every remaining output head (classification, incidence, regression)
+    "F": [r"{other}_.*"],
+}
+
+
+def resolve_quant_scope(scope: str | list[str] | None, task_names: list[str]) -> list[str] | None:
+    """Turn a quant_scope preset (or explicit regex list) into layer-name regexes.
+
+    Presets: "all" (None: every leaf), "none", "encoder" (input nets + encoder),
+    "decoder" (decoder layers + all task heads), and the cumulative decoder-only stages
+    "dec_A" ... "dec_F" (dec_F == "decoder"). Task heads are addressed by their configured
+    name (e.g. "mask"), translated to the kerasify prefix task<i>.
+
+    Raises:
+        ValueError: If the preset is unknown.
+    """
+    if scope is None or scope == "all":
+        return None
+    if not isinstance(scope, str):
+        return list(scope)
+    mask = [f"task{i}" for i, n in enumerate(task_names) if n == "mask"]
+    other = [f"task{i}" for i, n in enumerate(task_names) if n != "mask"]
+    fill = {"mask": "(" + "|".join(mask or ["$^"]) + ")", "other": "(" + "|".join(other or ["$^"]) + ")"}
+    stage = [p.format(**fill) for s in "ABCDEF" for p in _DEC_STAGE_GROUPS[s]]
+    if scope == "none":
+        return []
+    if scope == "encoder":
+        return [_ENC]
+    if scope == "decoder":
+        return stage
+    if scope.startswith("dec_") and scope[4:] in _DEC_STAGE_GROUPS:
+        upto = "ABCDEF".index(scope[4:]) + 1
+        return [p.format(**fill) for s in "ABCDEF"[:upto] for p in _DEC_STAGE_GROUPS[s]]
+    raise ValueError(f"unknown quant_scope preset '{scope}'")
+
 
 class KerasMaskFormer(MaskFormer):
     def __init__(
@@ -33,6 +84,7 @@ class KerasMaskFormer(MaskFormer):
         matcher: nn.Module | None = None,
         encoder_tasks: nn.ModuleList | None = None,
         quant: dict | None = None,
+        quant_scope: str | list[str] | None = None,
     ):
         """Build the keras-backed MaskFormer.
 
@@ -47,8 +99,12 @@ class KerasMaskFormer(MaskFormer):
             encoder_tasks: Optional tasks run on post-encoder features (Dense nets swapped in place).
             quant: None for the float reference model, or an HGQ2 QuantSpec dict
                 (keys: weight, datalane, ebops) for the quantization-aware model.
+            quant_scope: restrict quantization to part of the model, for ablations. A preset
+                name ("all", "none", "encoder", "decoder", "dec_A".."dec_F"; see
+                resolve_quant_scope) or explicit layer-name regexes. Leaves outside the
+                scope are the float twins on the identical graph. Ignored when quant is None.
         """
-        factory = LayerFactory(quant)
+        factory = LayerFactory(quant, resolve_quant_scope(quant_scope, [t.name for t in tasks]))
 
         # Reset keras's process-global name counters so every layer name — including the
         # quantizer sub-layers HGQ2 creates internally, which cannot be named explicitly —
