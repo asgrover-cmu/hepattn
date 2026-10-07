@@ -22,7 +22,7 @@ import torch
 
 pytest.importorskip("hgq", reason="hgq dependency group not installed")
 
-from parity_utils import make_padded_batch  # noqa: F401  (ty: ignore) — pins test conftest paths
+from parity_utils import make_padded_batch  # noqa: F401  # ty: ignore [unresolved-import]  (pins test conftest paths)
 from test_maskformer_parity import clic_dummy_batch, make_keras_model  # ty: ignore
 
 QUANT = {

@@ -22,7 +22,7 @@ import torch
 
 pytest.importorskip("hgq", reason="hgq dependency group not installed")
 
-from parity_utils import make_padded_batch  # noqa: F401  (ty: ignore) — pins test conftest paths
+from parity_utils import make_padded_batch  # noqa: F401  # ty: ignore [unresolved-import]  (pins test conftest paths)
 from test_maskformer_parity import clic_dummy_batch, make_keras_model  # ty: ignore
 
 from hepattn.keras import keras
@@ -138,7 +138,7 @@ def test_bitwidth_monitor_reports_all_three_families(built):
     """
     model, _ = built
     pl = _StubModule(model)
-    BitwidthMonitor().on_validation_epoch_end(None, pl)
+    BitwidthMonitor().on_validation_epoch_end(None, pl)  # ty: ignore [invalid-argument-type]
 
     for suffix in ("b", "f", "i"):
         assert f"val/bits_{suffix}_mean" in pl.logged, f"/{suffix} family not logged — EBOPs depends on /f and /i"
@@ -150,7 +150,7 @@ def test_bitwidth_monitor_tracks_each_family_independently(built):
     """Perturbing one family must move only that family's readout."""
     model, _ = built
     pl = _StubModule(model)
-    BitwidthMonitor().on_validation_epoch_end(None, pl)
+    BitwidthMonitor().on_validation_epoch_end(None, pl)  # ty: ignore [invalid-argument-type]
     before = {s: pl.logged[f"val/bits_{s}_mean"] for s in ("b", "f", "i")}
 
     params = [p for n, p in model.named_parameters() if "quantizer" in n and p.requires_grad and n.endswith("/f")]
@@ -158,7 +158,7 @@ def test_bitwidth_monitor_tracks_each_family_independently(built):
         for p in params:
             p.sub_(1.0)
     try:
-        BitwidthMonitor().on_validation_epoch_end(None, pl)
+        BitwidthMonitor().on_validation_epoch_end(None, pl)  # ty: ignore [invalid-argument-type]
         assert pl.logged["val/bits_f_mean"] < before["f"], "/f readout did not follow a real change"
         assert pl.logged["val/bits_b_mean"] == pytest.approx(before["b"]), "/b moved when only /f was perturbed"
         assert pl.logged["val/bits_i_mean"] == pytest.approx(before["i"]), "/i moved when only /f was perturbed"
