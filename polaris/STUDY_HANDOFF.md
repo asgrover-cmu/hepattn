@@ -48,12 +48,29 @@ granularity** and against **real Linformer compression**.
   `QuantizerConfigScope(place="datalane", ...)` the way the script passes them. A variant
   HGQ2 rejects prints `FAILED` with the reason and the others still run.
 
+## Where you are running
+
+You are running **on a compute node, inside an interactive `debug` job** (`qsub -I`,
+1 h maximum) that Akum started from `tmux` on a login node. That shapes everything:
+
+- **You already have the GPU.** Run the tests and the timing script directly in this
+  shell. Do not `qsub` anything: it would queue behind this job and may hit the per-user
+  debug limit.
+- **The job's walltime is a hard stop, and it kills you too.** Check the time left first
+  (`qstat -f $PBS_JOBID | grep -E "walltime"`) and again before each long step. Do not
+  start a step that cannot finish.
+- **Write progress to disk as you go**, in `polaris/STUDY_PROGRESS.md` (untracked): what
+  is done, what you found, what is next, and the exact command in flight. The next
+  session starts cold in a new job and reads that file first. If it already exists, you
+  are that next session: read it and continue from where it stops.
+- **Keep logs on disk** (`tee bwgran_<attn>.log`), never only in the terminal.
+- **Outbound network goes through the ALCF proxy.** If a download fails, export
+  `http_proxy` and `https_proxy` (`http://proxy.alcf.anl.gov:3128`) and retry.
+
 ## Polaris facts (some are guesses; check them first)
 
-- Compute nodes have **no outbound network**. Anything that downloads runs on a login node.
-- Login nodes have process limits: `Errno 11` on imports or installs means run it in a job.
-- `debug` queue: 1-2 nodes, 1 h maximum, and a per-user limit on queued jobs. You cannot
-  ssh to a compute node, so run interactive sessions inside `tmux` on the login node.
+- You cannot ssh to a compute node. If this session dies, the job is lost with it.
+- The `debug` queue allows 1-2 nodes for 1 h, with a per-user limit on queued jobs.
 - Project `hgcal-maskformer-fpga`; data in `/eagle/hgcal-maskformer-fpga/clic_data/`
   (`val_clic_fix.root` is the file the profiler reads).
 - The repo's Polaris kit expects a clone and venv under `$WORK_ROOT/hepattn`, with
@@ -73,21 +90,25 @@ granularity** and against **real Linformer compression**.
 1. **Orient.** Confirm the branch and commit, find `env.sh`, find the venv python, and
    confirm on a compute node that `torch`, `keras` and `hgq` import and CUDA is available.
    Report what you found before going further.
-2. **Reference package.** Ask Akum before installing anything. If he agrees, on a login
-   node: `<venv>/bin/python -m pip install git+https://github.com/compressed-maskformer-reco/masked-linformer`.
-3. **Tests.** On a compute node:
+2. **Reference package.** Ask Akum before installing anything. If he agrees:
+   `<venv>/bin/python -m pip install git+https://github.com/compressed-maskformer-reco/masked-linformer`
+   (through the proxy, see above).
+3. **Tests.** In this shell:
    `PYTHONPATH=$PWD/src KERAS_BACKEND=torch <venv>/bin/python -m pytest tests/keras/test_masked_linformer.py -v`
    Report passed / failed / skipped per test. If a parity test fails, that is a real bug in
    the port: show the measured error and the failing case, propose a fix, and wait.
-4. **Timing study.** One GPU, debug queue, inside `tmux`:
+4. **Timing study.** In this shell, on one GPU, one attention setup at a time so each
+   piece fits the time left and leaves its own log:
    ```bash
-   qsub -I -l select=1:ngpus=1 -l walltime=01:00:00 -l filesystems=eagle:home -A hgcal-maskformer-fpga -q debug
-   export PYTHONNOUSERSITE=1 KERAS_BACKEND=torch TORCHDYNAMO_DISABLE=1
-   DATA_ROOT=/eagle/hgcal-maskformer-fpga/clic_data PYTHONPATH=$PWD/src <venv>/bin/python polaris/14_bw_granularity.py 2>&1 | tee bwgran.log
+   export PYTHONNOUSERSITE=1 KERAS_BACKEND=torch TORCHDYNAMO_DISABLE=1 CUDA_VISIBLE_DEVICES=0
+   export DATA_ROOT=/eagle/hgcal-maskformer-fpga/clic_data PYTHONPATH=$PWD/src
+   PROF_ATTN=k256   <venv>/bin/python polaris/14_bw_granularity.py 2>&1 | tee bwgran_k256.log
+   PROF_ATTN=mlin64 <venv>/bin/python polaris/14_bw_granularity.py 2>&1 | tee bwgran_mlin64.log
    ```
-   It builds 6 model variants (2 attention setups x 3 granularities) at batch 32 and 64,
-   12 builds in all. If the hour is tight, split it: `PROF_ATTN=k256` then `PROF_ATTN=mlin64`,
-   or `PROF_BATCHES=32`.
+   Each call builds 3 granularities at batch 32 and 64 (6 builds). Nobody has timed a
+   build, so run `k256` with `PROF_BATCHES=32` first, see how long it takes, and size the
+   rest from that. Run it in the background and poll the log; do not block on it. What
+   does not fit goes into `STUDY_PROGRESS.md` for the next session.
 5. **Report** the table it prints, plus:
    - Does `k256 per-element` at batch 32 land near the 1.008 s already measured? If not,
      say so first: nothing else in the table can be trusted until that is explained.
