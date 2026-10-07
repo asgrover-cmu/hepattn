@@ -50,10 +50,15 @@ TRAIN_EVENTS = 994_400
 ATTN = {
     "k256": None,  # p7's ENCODER / DECODER as they are
     "mlin64": (
-        {**p7.ENCODER, "attn_type": "masked-linformer",
-         "attn_kwargs": {"num_heads": 16, "linformer_seq_len": 168, "linformer_proj_dim": 64}},
-        {**p7.DECODER, "decoder_layer_config": {"dim": p7.DIM, "hybrid_norm": True, "attn_kwargs": {
-            "num_heads": 16, "attn_type": "masked-linformer", "linformer_seq_len": 160, "linformer_proj_dim": 64}}},
+        {**p7.ENCODER, "attn_type": "masked-linformer", "attn_kwargs": {"num_heads": 16, "linformer_seq_len": 168, "linformer_proj_dim": 64}},
+        {
+            **p7.DECODER,
+            "decoder_layer_config": {
+                "dim": p7.DIM,
+                "hybrid_norm": True,
+                "attn_kwargs": {"num_heads": 16, "attn_type": "masked-linformer", "linformer_seq_len": 160, "linformer_proj_dim": 64},
+            },
+        },
     ),
 }
 _PROD = (p7.ENCODER, p7.DECODER)
@@ -115,8 +120,11 @@ def main() -> None:
                 gb = torch.cuda.max_memory_allocated() / 2**30
                 hours = TRAIN_EVENTS / b * ms / 1e3 / 3600
                 rows.append((tag, b, n_w, n_q, ms, ms / b, gb, hours))
-                print(f"[{tag:28s}] batch {b:3d}  weights {n_w / 1e6:6.2f}M  quantizer {n_q / 1e6:7.3f}M  "
-                      f"{ms:8.1f} ms/step  {ms / b:6.2f} ms/event  {gb:5.1f} GB  ~{hours:5.2f} h/epoch(1 GPU)", flush=True)
+                print(
+                    f"[{tag:28s}] batch {b:3d}  weights {n_w / 1e6:6.2f}M  quantizer {n_q / 1e6:7.3f}M  "
+                    f"{ms:8.1f} ms/step  {ms / b:6.2f} ms/event  {gb:5.1f} GB  ~{hours:5.2f} h/epoch(1 GPU)",
+                    flush=True,
+                )
             except torch.OutOfMemoryError:
                 print(f"[{tag:28s}] batch {b:3d}  OUT OF MEMORY", flush=True)
             except (RuntimeError, ValueError, TypeError, KeyError, AssertionError) as e:  # a variant HGQ2 rejects must not hide the others
