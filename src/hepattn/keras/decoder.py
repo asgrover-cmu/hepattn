@@ -88,7 +88,13 @@ class KerasMaskFormerDecoder(MaskFormerDecoder):
         Raises:
             NotImplementedError: If local strided attention or kmeans cross-attention is configured.
         """
-        super().__init__(**kwargs)
+        # the parent builds throwaway torch layers before they are replaced below, and the torch
+        # Attention has no "masked-linformer"; hand it the layer config with a type it accepts
+        base_kwargs = dict(kwargs)
+        layer_attn_kwargs = kwargs["decoder_layer_config"].get("attn_kwargs") or {}
+        if layer_attn_kwargs.get("attn_type") == "masked-linformer":
+            base_kwargs["decoder_layer_config"] = {**kwargs["decoder_layer_config"], "attn_kwargs": {**layer_attn_kwargs, "attn_type": "torch"}}
+        super().__init__(**base_kwargs)
         factory = factory or LayerFactory()
 
         if self.local_strided_attn:
