@@ -67,26 +67,61 @@ You are running **on a compute node, inside an interactive `debug` job** (`qsub 
 - **Outbound network goes through the ALCF proxy.** If a download fails, export
   `http_proxy` and `https_proxy` (`http://proxy.alcf.anl.gov:3128`) and retry.
 
+## Step 0: Akum's home directory is over quota
+
+On 2026-10-06 `git status` in `~/hepattn-hgq` failed with `disk quota exceeded` while Git
+LFS wrote a temp file. Home is limited to ~45 GB. This checkout lives under `/eagle` for
+that reason, but your own session state is in `~/.claude`, so fix the quota before the
+study. Do it in two phases and stop at the end of each.
+
+**Phase A: find what is using the space. Read-only.**
+
+- `myquota`, then `du -sh ~/* ~/.cache ~/.local ~/.pixi ~/.claude 2>/dev/null | sort -rh | head -20`.
+- Go one level deeper into the largest few (checkpoints, logs, `.pixi` / `.venv`
+  environments, `.git/lfs`, package caches, data files).
+- Give Akum a table of path, size, what it is and how you know, grouped as:
+  - **A. Regenerable:** pip / uv / pixi caches, `__pycache__`, LFS temp files.
+  - **B. Rebuildable with effort:** pixi or venv environments, duplicate git clones.
+  - **C. Possibly irreplaceable:** checkpoints, training logs, prediction files, and
+    anything you cannot identify. Say whether a copy already exists under `/eagle`.
+- Stop and ask which items to remove or move. Ask item by item for B and C.
+
+**Phase B: free only what Akum approved.**
+
+- Delete nothing he has not named. No wildcards beyond what he approved.
+- For group C, move to `/eagle/hgcal-maskformer-fpga/` instead of deleting, and verify the
+  copy (file count and total size) before removing the original.
+- Never touch `~/.ssh`, `~/.claude`, or anything under `/eagle` that is not his.
+- Before he decides on a git clone, show its branch, remotes, and any unpushed commits or
+  uncommitted changes. Known clones: `~/hepattn`, `~/hepattn-linformer`, `~/hepattn-hgq`
+  (on `keras-hgq2`), `~/hepattn-clic-paper`. `~/hepattn-linformer/.pixi/envs/clic` is the
+  environment the Lion-vs-AdamW runs use, and that clone has a local branch
+  `backup/polaris-configs-old` holding a commit that exists nowhere else.
+- Report `myquota` again and stop.
+
 ## Polaris facts (some are guesses; check them first)
 
 - You cannot ssh to a compute node. If this session dies, the job is lost with it.
 - The `debug` queue allows 1-2 nodes for 1 h, with a per-user limit on queued jobs.
 - Project `hgcal-maskformer-fpga`; data in `/eagle/hgcal-maskformer-fpga/clic_data/`
   (`val_clic_fix.root` is the file the profiler reads).
+- This checkout should be under `/eagle`, not `$HOME`. If `pwd` says otherwise, tell Akum.
 - The repo's Polaris kit expects a clone and venv under `$WORK_ROOT/hepattn`, with
   `hepattn` itself NOT installed in the venv, so `PYTHONPATH=<checkout>/src` decides which
   code runs. A guess from an old `env.sh` line: the venv is
   `/eagle/hgcal-maskformer-fpga/hepattn-hgq/hepattn/.venv`, and the clone beside it sits on
   an older branch (`keras-hgq2`). **Run from the checkout that has this file**, and confirm
   with `python -c "import hepattn; print(hepattn.__file__)"`.
-- `polaris/env.sh` is gitignored. If this checkout has none, copy it from the other HGQ
-  clone or build it from `env.sh.example`; ask Akum for values you cannot discover.
+- `polaris/env.sh` is gitignored, so this fresh clone has none. Look in
+  `~/hepattn-hgq/polaris/` and `~/hepattn-linformer/polaris/`, show Akum the contents
+  before copying one, or build it from `env.sh.example`. Ask for values you cannot discover.
 - The venv's HGQ2 may be older than the build pinned in `pyproject.toml`. The pin is only
   needed for `hgq_train_compile`, which this study does not use. Report the installed
   version (`pip show hgq2`); do not reinstall without asking.
 
 ## Do this, in order
 
+0. **Quota.** Step 0 above, both phases, before anything below.
 1. **Orient.** Confirm the branch and commit, find `env.sh`, find the venv python, and
    confirm on a compute node that `torch`, `keras` and `hgq` import and CUDA is available.
    Report what you found before going further.
@@ -128,6 +163,7 @@ You are running **on a compute node, inside an interactive `debug` job** (`qsub 
 
 ## Stop and ask Akum before
 
+- Deleting or moving anything in his home directory.
 - Submitting anything outside the `debug` queue, or any multi-GPU or multi-hour job.
 - Installing or upgrading packages in the venv.
 - Changing a config's physics (model size, loss, optimizer, learning rate, data).
