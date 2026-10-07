@@ -22,8 +22,7 @@ INIT_BETA = 2.08e-9
 WARMUP = 2
 
 
-def drive_reference(ebops_seq, target=TARGET, init_beta=INIT_BETA, warmup=WARMUP,
-                    p=1.0, i=0.5, d=0.0, max_beta=1e-7, min_beta=0.0, damp=0.0):
+def drive_reference(ebops_seq, target=TARGET, init_beta=INIT_BETA, warmup=WARMUP, p=1.0, i=0.5, d=0.0, max_beta=1e-7, min_beta=0.0, damp=0.0):
     """Run HGQ2's own BetaPID over `ebops_seq`, returning the beta after each epoch.
 
     `get_ebops`/`set_beta` are stubbed so no Keras model is needed; everything else --
@@ -32,8 +31,15 @@ def drive_reference(ebops_seq, target=TARGET, init_beta=INIT_BETA, warmup=WARMUP
     """
     hgq_pid = pytest.importorskip("hgq.utils.sugar.beta_pid")
     cb = hgq_pid.BetaPID(
-        target_ebops=target, init_beta=init_beta, p=p, i=i, d=d,
-        warmup=warmup, log=True, max_beta=max_beta, min_beta=min_beta,
+        target_ebops=target,
+        init_beta=init_beta,
+        p=p,
+        i=i,
+        d=d,
+        warmup=warmup,
+        log=True,
+        max_beta=max_beta,
+        min_beta=min_beta,
         damp_beta_on_target=damp,
     )
     written: list[float] = []
@@ -57,11 +63,10 @@ def drive_reference(ebops_seq, target=TARGET, init_beta=INIT_BETA, warmup=WARMUP
     return out
 
 
-def drive_port(ebops_seq, target=TARGET, init_beta=INIT_BETA, warmup=WARMUP,
-               p=1.0, i=0.5, d=0.0, max_beta=1e-7, min_beta=0.0, damp=0.0):
-    cb = BetaPID(target_ebops=target, init_beta=init_beta, p=p, i=i, d=d,
-                 warmup_epochs=warmup, max_beta=max_beta, min_beta=min_beta,
-                 damp_beta_on_target=damp)
+def drive_port(ebops_seq, target=TARGET, init_beta=INIT_BETA, warmup=WARMUP, p=1.0, i=0.5, d=0.0, max_beta=1e-7, min_beta=0.0, damp=0.0):
+    cb = BetaPID(
+        target_ebops=target, init_beta=init_beta, p=p, i=i, d=d, warmup_epochs=warmup, max_beta=max_beta, min_beta=min_beta, damp_beta_on_target=damp
+    )
     out = []
     for epoch, ebops in enumerate(ebops_seq):
         out.append(init_beta if epoch < warmup else cb.step(ebops))
@@ -116,9 +121,7 @@ def test_reference_test_is_discriminating():
     cb = BetaPID(target_ebops=TARGET, init_beta=INIT_BETA, i=0.5, warmup_epochs=0)
     cb._seeded = True  # noqa: SLF001  (deliberately skip seeding, as a naive port would)
     unseeded = cb.step(1.6755e15)
-    assert unseeded != pytest.approx(INIT_BETA, rel=1e-6), (
-        "integral seeding is not load-bearing — the first output matched init_beta without it"
-    )
+    assert unseeded != pytest.approx(INIT_BETA, rel=1e-6), "integral seeding is not load-bearing — the first output matched init_beta without it"
 
 
 def test_first_post_warmup_output_reproduces_init_beta():
@@ -152,11 +155,12 @@ def test_warmup_holds_init_beta():
     betas = drive_port([1.6755e15] * 6, warmup=4)
     assert betas[:4] == [INIT_BETA] * 4
     assert betas[4] == pytest.approx(INIT_BETA, rel=1e-9)  # seeded, so continuous
-    assert betas[5] != betas[4]                             # then it moves
+    assert betas[5] != betas[4]  # then it moves
 
 
 def test_rejects_beta_scheduler_in_the_same_trainer():
     """BetaScheduler writes _beta every batch and would erase the controller."""
+
     class FakeTrainer:
         callbacks: ClassVar[list] = [BetaScheduler(beta_start=0.0, beta_end=1e-12), BetaPID(TARGET, INIT_BETA)]
 
@@ -170,12 +174,15 @@ def test_rejects_beta_scheduler_in_the_same_trainer():
     LoneTrainer.callbacks[0].setup(LoneTrainer(), None, "fit")  # must not raise
 
 
-@pytest.mark.parametrize(("kwargs", "match"), [
-    ({"target_ebops": 0.0, "init_beta": 1e-9}, "target_ebops"),
-    ({"target_ebops": -1.0, "init_beta": 1e-9}, "target_ebops"),
-    ({"target_ebops": 1e15, "init_beta": 0.0}, "init_beta"),
-    ({"target_ebops": 1e15, "init_beta": 1e-9, "i": 0.0}, "integral gain"),
-])
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"target_ebops": 0.0, "init_beta": 1e-9}, "target_ebops"),
+        ({"target_ebops": -1.0, "init_beta": 1e-9}, "target_ebops"),
+        ({"target_ebops": 1e15, "init_beta": 0.0}, "init_beta"),
+        ({"target_ebops": 1e15, "init_beta": 1e-9, "i": 0.0}, "integral gain"),
+    ],
+)
 def test_rejects_invalid_arguments(kwargs, match):
     with pytest.raises(ValueError, match=match):
         BetaPID(**kwargs)
@@ -185,11 +192,11 @@ def test_log_space_law_is_what_the_docstring_claims():
     """Independent re-derivation of one step, not a re-run of the implementation."""
     cb = BetaPID(target_ebops=TARGET, init_beta=INIT_BETA, p=1.0, i=0.5, warmup_epochs=0)
     e0, e1 = 1.6755e15, 1.5e15
-    cb.step(e0)                       # seeds; returns INIT_BETA
+    cb.step(e0)  # seeds; returns INIT_BETA
     got = cb.step(e1)
 
     err0 = math.log10(e0 / TARGET + 1e-9)
-    integral = (math.log10(INIT_BETA) - 1.0 * err0) / 0.5     # post-seed, post first +=
+    integral = (math.log10(INIT_BETA) - 1.0 * err0) / 0.5  # post-seed, post first +=
     err1 = math.log10(e1 / TARGET)
     integral += err1
     expected = 10.0 ** (1.0 * err1 + 0.5 * integral)
@@ -256,15 +263,15 @@ def run_hook(cb, module, epoch):
 
 def test_hook_holds_init_beta_through_warmup_then_engages():
     cb = BetaPID(target_ebops=TARGET, init_beta=INIT_BETA, i=0.5, warmup_epochs=3)
-    module = FakeModule([1.6755e15 / 4] * 4)      # sums to the measured 1.6755e15
+    module = FakeModule([1.6755e15 / 4] * 4)  # sums to the measured 1.6755e15
 
     for epoch in range(3):
         written = run_hook(cb, module, epoch)
         assert written == [INIT_BETA] * 4, f"epoch {epoch} must hold init_beta, got {written}"
 
-    seeded = run_hook(cb, module, 3)              # first controlled epoch == init_beta
+    seeded = run_hook(cb, module, 3)  # first controlled epoch == init_beta
     assert seeded == pytest.approx([INIT_BETA] * 4, rel=1e-9)
-    moved = run_hook(cb, module, 4)               # then it must actually move
+    moved = run_hook(cb, module, 4)  # then it must actually move
     assert moved[0] > INIT_BETA
     assert moved == pytest.approx([moved[0]] * 4), "every layer must get the same beta"
 

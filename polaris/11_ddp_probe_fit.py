@@ -41,8 +41,10 @@ def _probing_sync(process_group, module_states, broadcast_bucket_size, src):
         backend = dist.get_backend(process_group)
     except Exception as exc:  # noqa: BLE001
         backend = f"<{type(exc).__name__}>"
-    print(f"[SYNC-PROBE rank={rank}] module_states={len(module_states)} devices={devs} "
-          f"backend={backend} bucket={broadcast_bucket_size} src={src}", flush=True)
+    print(
+        f"[SYNC-PROBE rank={rank}] module_states={len(module_states)} devices={devs} backend={backend} bucket={broadcast_bucket_size} src={src}",
+        flush=True,
+    )
     return _orig_sync(process_group, module_states, broadcast_bucket_size, src)
 
 
@@ -62,10 +64,12 @@ def _probing_init(self, module, *args, **kwargs):
     print(f"[DDP-PROBE rank={rank}] {len(named)} params+buffers, devices={devs}", flush=True)
     print(f"[DDP-PROBE rank={rank}] non-cuda: {len(bad)}", flush=True)
     ignore = getattr(module, "_ddp_params_and_buffers_to_ignore", None)
-    print(f"[DDP-PROBE rank={rank}] _ddp_params_and_buffers_to_ignore="
-          f"{'None' if ignore is None else len(ignore)}", flush=True)
-    print(f"[DDP-PROBE rank={rank}] broadcast_buffers={kwargs.get('broadcast_buffers', True)} "
-          f"device_ids={kwargs.get('device_ids', args[0] if args else None)}", flush=True)
+    print(f"[DDP-PROBE rank={rank}] _ddp_params_and_buffers_to_ignore={'None' if ignore is None else len(ignore)}", flush=True)
+    print(
+        f"[DDP-PROBE rank={rank}] broadcast_buffers={kwargs.get('broadcast_buffers', True)} "
+        f"device_ids={kwargs.get('device_ids', args[0] if args else None)}",
+        flush=True,
+    )
     for name, d in bad[:25]:
         print(f"[DDP-PROBE rank={rank}]   {name} -> {d}", flush=True)
     if len(bad) > 25:

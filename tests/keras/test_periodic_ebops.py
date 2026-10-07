@@ -38,7 +38,7 @@ def built():
     with torch.no_grad():
         model.eval()(inputs)  # quantized layers build lazily at first forward
     model.train()
-    pl = SimpleNamespace(model=model, log=lambda *a, **k: None)
+    pl = SimpleNamespace(model=model, log=lambda *_a, **_k: None)
     return model, pl, inputs
 
 
@@ -50,7 +50,7 @@ def test_finds_quantized_layers(built):
     """A callback that finds zero layers would silently be a no-op."""
     _, pl, _ = built
     cb = PeriodicEBOPs(every_n_steps=EVERY)
-    assert len(cb._quantized_layers(pl)) > 0, "no quantized layers found — callback would do nothing"
+    assert len(cb._quantized_layers(pl)) > 0, "no quantized layers found — callback would do nothing"  # noqa: SLF001
 
 
 @pytest.mark.parametrize("step", [0, 1, 7, 8, 9, 16])
@@ -58,7 +58,7 @@ def test_schedule(built, step):
     _, pl, _ = built
     cb = PeriodicEBOPs(every_n_steps=EVERY)
     _fire(cb, pl, step)
-    flags = {layer._enable_ebops for layer in cb._quantized_layers(pl)}
+    flags = {layer._enable_ebops for layer in cb._quantized_layers(pl)}  # noqa: SLF001
     assert len(flags) == 1, "quantized layers disagree about the EBOPs flag"
     assert flags.pop() is (step % EVERY == 0)
 
@@ -82,7 +82,8 @@ def test_penalty_collapses_on_skipped_steps(built):
 
 def test_skipped_step_still_trains(built):
     """An empty loss list must not break the step: the total must stay finite and
-    differentiable, otherwise every skipped step would crash training."""
+    differentiable, otherwise every skipped step would crash training.
+    """
     model, pl, inputs = built
     cb = PeriodicEBOPs(every_n_steps=EVERY)
     _fire(cb, pl, 3)  # skipped
@@ -92,11 +93,7 @@ def test_skipped_step_still_trains(built):
     assert torch.isfinite(torch.as_tensor(total)), "non-finite penalty on a skipped step"
 
     # any differentiable model output will do; avoid pinning a task-specific key
-    head = next(
-        t
-        for t in outputs["final"]["classification"].values()
-        if torch.is_tensor(t) and t.dtype.is_floating_point and t.requires_grad
-    )
+    head = next(t for t in outputs["final"]["classification"].values() if torch.is_tensor(t) and t.dtype.is_floating_point and t.requires_grad)
     (head.float().pow(2).mean() + torch.as_tensor(total)).backward()
     grads = [p.grad for p in model.parameters() if p.grad is not None]
     assert grads, "no gradients flowed on a skipped step"

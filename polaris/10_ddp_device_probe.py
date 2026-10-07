@@ -63,10 +63,17 @@ model = p7.build(p7.QUANT)
 model = model.cpu()
 if os.environ.get("PROBE_DUMMY"):
     from hepattn.experiments.clic.pflow_data import CLICDataset
-    ds = CLICDataset(filepath="", inputs={"node": ["features"]},
-                     targets={"particle": ["e", "pt", "eta", "sinphi", "cosphi"]},
-                     scale_dict_path=p7.SCALE, num_events=4, num_objects=p7.NQ,
-                     max_nodes=p7.MAX_NODES, dummy_data=True)
+
+    ds = CLICDataset(
+        filepath="",
+        inputs={"node": ["features"]},
+        targets={"particle": ["e", "pt", "eta", "sinphi", "cosphi"]},
+        scale_dict_path=p7.SCALE,
+        num_events=4,
+        num_objects=p7.NQ,
+        max_nodes=p7.MAX_NODES,
+        dummy_data=True,
+    )
     ev = [ds[i] for i in range(4)]
     inp = {k: torch.stack([e[0][k] for e in ev]) for k in ev[0][0]}
 else:
@@ -85,8 +92,7 @@ par, buf, kv = report(model, f"after .to({DEV}) (what DDP would broadcast)")
 devs = {}
 for n, t in list(model.named_parameters()) + list(model.named_buffers()):
     devs.setdefault(str(t.device), []).append(n)
-print(f"\nexact device set across parameters+buffers: "
-      f"{ {k: len(v) for k, v in devs.items()} }")
+print(f"\nexact device set across parameters+buffers: { {k: len(v) for k, v in devs.items()} }")
 if len(devs) > 1:
     for k, v in devs.items():
         if len(v) < 12:
@@ -96,5 +102,8 @@ if DEV == "cuda":
 
 stragglers = [n for n, d in par + buf if d == "cpu"]
 print(f"\nVERDICT: {len(stragglers)} parameter/buffer(s) still on cpu after .to({DEV})")
-print("  -> these are what DDP._sync_module_states chokes on" if stragglers
-      else "  -> parameters/buffers are clean; the CPU tensor must come from elsewhere")
+print(
+    "  -> these are what DDP._sync_module_states chokes on"
+    if stragglers
+    else "  -> parameters/buffers are clean; the CPU tensor must come from elsewhere"
+)

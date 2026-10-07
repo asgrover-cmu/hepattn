@@ -12,6 +12,7 @@ Run via polaris/07_profile.pbs (debug queue, ~20 min).
 """
 
 import os
+import pathlib
 import time
 
 os.environ.setdefault("KERAS_BACKEND", "torch")
@@ -40,67 +41,130 @@ DIM, NQ, MAX_NODES = 256, 150, 160
 N_EVENTS = int(os.environ.get("PROF_EVENTS", "32"))
 WARMUP, ITERS = 5, 20
 DATA = os.environ["DATA_ROOT"]
-SCALE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
-                     "src/hepattn/experiments/clic/configs/clic_var_transform.yaml")
-SCALE = os.path.normpath(SCALE)
+SCALE = str(pathlib.Path(__file__).resolve().parent.parent / "src/hepattn/experiments/clic/configs/clic_var_transform.yaml")
 
 LINF = {"num_heads": 16, "linformer_seq_len": 256, "linformer_proj_dim": 256}
-ENCODER = {"num_layers": 6, "attn_type": "linformer", "hybrid_norm": True,
-           "value_residual": True, "num_register_tokens": 8, "attn_kwargs": dict(LINF)}
-DECODER = {"num_decoder_layers": 4, "num_queries": NQ, "mask_attention": True,
-           "use_query_masks": False,
-           "decoder_layer_config": {"dim": DIM, "hybrid_norm": True,
-                                    "attn_kwargs": {**LINF, "attn_type": "linformer"}}}
-QUANT = {"weight": {"default_q_type": "kbi", "b0": 8, "i0": 2},
-         "datalane": {"default_q_type": "kif", "i0": 4, "f0": 8},
-         "table": {"default_q_type": "kif", "i0": 2, "f0": 10},
-         "ebops": {"beta0": 1.0e-12}}
+ENCODER = {
+    "num_layers": 6,
+    "attn_type": "linformer",
+    "hybrid_norm": True,
+    "value_residual": True,
+    "num_register_tokens": 8,
+    "attn_kwargs": dict(LINF),
+}
+DECODER = {
+    "num_decoder_layers": 4,
+    "num_queries": NQ,
+    "mask_attention": True,
+    "use_query_masks": False,
+    "decoder_layer_config": {"dim": DIM, "hybrid_norm": True, "attn_kwargs": {**LINF, "attn_type": "linformer"}},
+}
+QUANT = {
+    "weight": {"default_q_type": "kbi", "b0": 8, "i0": 2},
+    "datalane": {"default_q_type": "kif", "i0": 4, "f0": 8},
+    "table": {"default_q_type": "kif", "i0": 2, "f0": 10},
+    "ebops": {"beta0": 1.0e-12},
+}
 
 
 def make_input_nets():
-    return nn.ModuleList([InputNet(
-        input_name="node", fields=["features"],
-        net=Dense(input_size=27, output_size=DIM),
-        posenc=FourierPositionEncoder(input_name="node", dim=DIM, fields=["eta", "phi"], scale=0.1))])
+    return nn.ModuleList([
+        InputNet(
+            input_name="node",
+            fields=["features"],
+            net=Dense(input_size=27, output_size=DIM),
+            posenc=FourierPositionEncoder(input_name="node", dim=DIM, fields=["eta", "phi"], scale=0.1),
+        )
+    ])
 
 
 def make_tasks():
     return nn.ModuleList([
-        ObjectClassificationTask(name="classification", input_object="query", output_object="pflow",
-            target_object="particle", num_classes=5, losses={"object_ce": 2}, costs={"object_ce": 2},
+        ObjectClassificationTask(
+            name="classification",
+            input_object="query",
+            output_object="pflow",
+            target_object="particle",
+            num_classes=5,
+            losses={"object_ce": 2},
+            costs={"object_ce": 2},
             net=Dense(input_size=DIM, output_size=6, hidden_layers=[256, 128, 32], activation=nn.SiLU()),
-            null_weight=0.5, class_weights=[1.0, 3.0, 8.0, 1.5, 1.0], mask_queries=False,
-            has_intermediate_loss=True),
-        ObjectHitMaskTask(name="mask", input_constituent="node", input_object="query",
-            output_object="pflow", target_object="particle", pred_threshold=0.1, logit_scale=4,
-            losses={"mask_bce": 5.0, "mask_dice": 1.0}, costs={"mask_dice": 1.0}, dim=DIM,
-            null_weight=1.0, has_intermediate_loss=True),
-        IncidenceRegressionTask(name="incidence", input_constituent="node", input_object="query",
-            output_object="pflow", target_object="particle", losses={"kl_div": 1.0},
-            costs={"kl_div": 1.0}, net=Dense(input_size=DIM, hidden_layers=2, activation=nn.SiLU()),
-            node_net=Dense(input_size=DIM, hidden_layers=1), has_intermediate_loss=False),
-        IncidenceBasedRegressionTask(name="regression", fields=["e", "pt", "eta", "sinphi", "cosphi"],
-            input_constituent="node", input_object="query", output_object="pflow",
-            target_object="particle", loss="l1", loss_weight=10.0, cost_weight=10.0,
-            use_incidence=True, use_nodes=True, cost="new", mode="scale", scale_dict_path=SCALE,
-            net=Dense(input_size=518, output_size=5, hidden_layers=[512, 256, 128, 64, 32],
-                      activation=nn.SiLU()), has_intermediate_loss=False)])
+            null_weight=0.5,
+            class_weights=[1.0, 3.0, 8.0, 1.5, 1.0],
+            mask_queries=False,
+            has_intermediate_loss=True,
+        ),
+        ObjectHitMaskTask(
+            name="mask",
+            input_constituent="node",
+            input_object="query",
+            output_object="pflow",
+            target_object="particle",
+            pred_threshold=0.1,
+            logit_scale=4,
+            losses={"mask_bce": 5.0, "mask_dice": 1.0},
+            costs={"mask_dice": 1.0},
+            dim=DIM,
+            null_weight=1.0,
+            has_intermediate_loss=True,
+        ),
+        IncidenceRegressionTask(
+            name="incidence",
+            input_constituent="node",
+            input_object="query",
+            output_object="pflow",
+            target_object="particle",
+            losses={"kl_div": 1.0},
+            costs={"kl_div": 1.0},
+            net=Dense(input_size=DIM, hidden_layers=2, activation=nn.SiLU()),
+            node_net=Dense(input_size=DIM, hidden_layers=1),
+            has_intermediate_loss=False,
+        ),
+        IncidenceBasedRegressionTask(
+            name="regression",
+            fields=["e", "pt", "eta", "sinphi", "cosphi"],
+            input_constituent="node",
+            input_object="query",
+            output_object="pflow",
+            target_object="particle",
+            loss="l1",
+            loss_weight=10.0,
+            cost_weight=10.0,
+            use_incidence=True,
+            use_nodes=True,
+            cost="new",
+            mode="scale",
+            scale_dict_path=SCALE,
+            net=Dense(input_size=518, output_size=5, hidden_layers=[512, 256, 128, 64, 32], activation=nn.SiLU()),
+            has_intermediate_loss=False,
+        ),
+    ])
 
 
 def build(quant):
     torch.manual_seed(0)
     return KerasMaskFormer(
-        input_nets=make_input_nets(), encoder=dict(ENCODER), decoder=dict(DECODER),
-        tasks=make_tasks(), dim=DIM,
+        input_nets=make_input_nets(),
+        encoder=dict(ENCODER),
+        decoder=dict(DECODER),
+        tasks=make_tasks(),
+        dim=DIM,
         matcher=Matcher(default_solver="scipy", adaptive_solver=False, parallel_solver=False),
-        quant=quant).to(DEVICE)
+        quant=quant,
+    ).to(DEVICE)
 
 
 def get_batch():
-    ds = CLICDataset(filepath=f"{DATA}/val_clic_fix.root", inputs={"node": ["features"]},
-                     targets={"particle": ["e", "pt", "eta", "sinphi", "cosphi"]},
-                     scale_dict_path=SCALE, num_events=N_EVENTS, num_objects=NQ,
-                     max_nodes=MAX_NODES, dummy_data=False)
+    ds = CLICDataset(
+        filepath=f"{DATA}/val_clic_fix.root",
+        inputs={"node": ["features"]},
+        targets={"particle": ["e", "pt", "eta", "sinphi", "cosphi"]},
+        scale_dict_path=SCALE,
+        num_events=N_EVENTS,
+        num_objects=NQ,
+        max_nodes=MAX_NODES,
+        dummy_data=False,
+    )
     ev = [ds[i] for i in range(min(N_EVENTS, len(ds)))]
 
     def stack(idx):  # idx 0 = inputs, 1 = targets
@@ -133,17 +197,19 @@ def total_loss(losses):
 def step(model, inp, tgt):
     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
         out = model(inp)
-        out, tgt2, losses = model.loss(out, dict(tgt))
+        out, _tgt2, losses = model.loss(out, dict(tgt))
     total_loss(losses).backward()
 
 
 def timeit(model, inp, tgt, tag):
     for _ in range(WARMUP):
-        model.zero_grad(set_to_none=True); step(model, inp, tgt)
+        model.zero_grad(set_to_none=True)
+        step(model, inp, tgt)
     torch.cuda.synchronize()
     t0 = time.perf_counter()
     for _ in range(ITERS):
-        model.zero_grad(set_to_none=True); step(model, inp, tgt)
+        model.zero_grad(set_to_none=True)
+        step(model, inp, tgt)
     torch.cuda.synchronize()
     ms = (time.perf_counter() - t0) / ITERS * 1e3
     print(f"[{tag:28s}] {ms:8.1f} ms/step  (batch {N_EVENTS})", flush=True)
@@ -153,11 +219,12 @@ def timeit(model, inp, tgt, tag):
 def set_ebops(model, on: bool) -> int:
     """EBOPs is a REGULARIZER: the forward math does not depend on it. Toggling it
     isolates the cost of the resource-penalty bookkeeping (an extra matmul +
-    add_loss per quantized layer, every step)."""
+    add_loss per quantized layer, every step).
+    """
     n = 0
     for m in model.modules():
         if hasattr(m, "_enable_ebops"):
-            m._enable_ebops = on
+            m._enable_ebops = on  # noqa: SLF001  (the attribute the forward reads)
             n += 1
     return n
 
@@ -173,7 +240,8 @@ def main():
         mf.eval()(inp)
     mf.train()
     t_float = timeit(mf, inp, tgt, "float (no quantizers)")
-    del mf; torch.cuda.empty_cache()
+    del mf
+    torch.cuda.empty_cache()
 
     mq = build(QUANT).train()
     with torch.no_grad():
@@ -195,10 +263,12 @@ def main():
         print("  => EBOPs is not the bottleneck; the cost is core fake-quantization.")
 
     print("\n================ B. TOP CUDA OPS (production config) ================")
-    from torch.profiler import ProfilerActivity, profile
+    from torch.profiler import ProfilerActivity, profile  # noqa: PLC0415
+
     with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA]) as prof:
         for _ in range(3):
-            mq.zero_grad(set_to_none=True); step(mq, inp, tgt)
+            mq.zero_grad(set_to_none=True)
+            step(mq, inp, tgt)
         torch.cuda.synchronize()
     print(prof.key_averages().table(sort_by="self_cuda_time_total", row_limit=22))
 
@@ -214,8 +284,7 @@ def main():
     print(f"  CPU self time  : {cpu_us / 1e3:>10.1f} ms over 3 steps")
     print(f"  GPU self time  : {cuda_us / 1e3:>10.1f} ms over 3 steps")
     print("  (CPU > GPU means the step is launch/dispatch bound, not compute bound)")
-    print(f"  distinct CUDA-active op invocations : {launches:>10,} over 3 steps"
-          f"  ({launches // 3:,}/step)")
+    print(f"  distinct CUDA-active op invocations : {launches:>10,} over 3 steps  ({launches // 3:,}/step)")
     print(f"  total CUDA self time                : {cuda_us / 1e3:>10.1f} ms over 3 steps")
     print(f"  mean CUDA time per invocation       : {cuda_us / max(launches, 1):>10.1f} us")
     print("  (a few us per op => launch-bound, not FLOP-bound)")

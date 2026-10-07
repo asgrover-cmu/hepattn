@@ -51,20 +51,25 @@ class StepTimer(pl.Callback):
         rank = trainer.global_rank
         kept = self.dt[WARMUP:]
         if len(kept) < 10:
-            print(f"[STEP-TIME rank={rank}] only {len(self.dt)} batches, "
-                  f"{len(kept)} after {WARMUP} warmup -- run more", flush=True)
+            print(f"[STEP-TIME rank={rank}] only {len(self.dt)} batches, {len(kept)} after {WARMUP} warmup -- run more", flush=True)
             return
         med = statistics.median(kept)
         devices = trainer.world_size
         per_rank = TRAIN_EVENTS / (devices * trainer.datamodule.batch_size)
-        print(f"[STEP-TIME rank={rank}] batches={len(self.dt)} warmup={WARMUP} "
-              f"median={med:.4f}s mean={statistics.mean(kept):.4f}s "
-              f"p10={sorted(kept)[len(kept) // 10]:.4f}s "
-              f"first={self.dt[0]:.2f}s", flush=True)
+        print(
+            f"[STEP-TIME rank={rank}] batches={len(self.dt)} warmup={WARMUP} "
+            f"median={med:.4f}s mean={statistics.mean(kept):.4f}s "
+            f"p10={sorted(kept)[len(kept) // 10]:.4f}s "
+            f"first={self.dt[0]:.2f}s",
+            flush=True,
+        )
         if rank == 0:
-            print(f"[STEP-TIME] devices={devices} batch={trainer.datamodule.batch_size} "
-                  f"-> {per_rank:.0f} micro-batches/rank/epoch "
-                  f"-> EPOCH {per_rank * med / 3600:.2f} h", flush=True)
+            print(
+                f"[STEP-TIME] devices={devices} batch={trainer.datamodule.batch_size} "
+                f"-> {per_rank:.0f} micro-batches/rank/epoch "
+                f"-> EPOCH {per_rank * med / 3600:.2f} h",
+                flush=True,
+            )
 
 
 _orig_trainer_init = pl.Trainer.__init__

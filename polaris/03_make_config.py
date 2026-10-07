@@ -105,7 +105,7 @@ WARMUP_STEPS = max(1, round(WARMUP_EPOCHS * STEPS_PER_EPOCH))
 LR_MAX = 5.0e-5 / ACCUM
 CLIP = 0.1 * ACCUM
 
-with open(SRC) as f:
+with SRC.open() as f:
     cfg = yaml.safe_load(f)
 
 cfg["name"] = "CLIC_pflow_HGQ_polaris"
@@ -252,7 +252,7 @@ for task in net["tasks"]["init_args"]["modules"]:
     if "scale_dict_path" in ia:
         ia["scale_dict_path"] = SCALE
 
-with open(DST, "w") as f:
+with DST.open("w") as f:
     yaml.safe_dump(cfg, f, sort_keys=False)
 
 print(f"WROTE {DST}")
@@ -264,18 +264,16 @@ print(f"  lr max     {LR_MAX:.3e}   clip {CLIP}   (invariant to accum)")
 print(f"  epochs     {EPOCHS}")
 if BETA_MODE == "pid":
     print(f"  beta       PID -> target {TARGET_EBOPS:.3e} EBOPs (measured now: 1.6755e15)")
-    print(f"             init {INIT_BETA_EFFECTIVE:.2e}  ceiling {MAX_BETA_EFFECTIVE:.2e}"
-          f"  i={PID_I}  warmup {PID_WARMUP_EPOCHS} epoch(s)")
+    print(f"             init {INIT_BETA_EFFECTIVE:.2e}  ceiling {MAX_BETA_EFFECTIVE:.2e}  i={PID_I}  warmup {PID_WARMUP_EPOCHS} epoch(s)")
     headroom = math.log10(MAX_BETA_EFFECTIVE / INIT_BETA_EFFECTIVE)
     err = math.log10(1.6755e15 / TARGET_EBOPS)
-    print(f"             {headroom:.2f} decades of headroom; at a constant error of {err:.3f}"
-          f" the ceiling is reached in ~{headroom / (PID_I * err):.0f} epochs")
+    print(
+        f"             {headroom:.2f} decades of headroom; at a constant error of {err:.3f}"
+        f" the ceiling is reached in ~{headroom / (PID_I * err):.0f} epochs"
+    )
 else:
     print(f"  beta_end   {BETA_END:.2e}  (open-loop schedule)")
     print(f"  beta ramp  {WARMUP_STEPS} steps = {WARMUP_EPOCHS:g} epoch(s) at {STEPS_PER_EPOCH} steps/epoch")
 if EBOPS_EVERY > 1:
     scaled = f"beta_end scaled to {BETA_END_EFFECTIVE:.2e}" if BETA_MODE != "pid" else "pid betas scaled by 8"
-    print(
-        f"  EBOPs      every {EBOPS_EVERY} steps ({scaled}"
-        f" so time-averaged pressure is unchanged); ~16% faster steps"
-    )
+    print(f"  EBOPs      every {EBOPS_EVERY} steps ({scaled} so time-averaged pressure is unchanged); ~16% faster steps")

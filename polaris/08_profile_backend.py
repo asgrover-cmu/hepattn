@@ -116,10 +116,17 @@ def main():
 
     if DUMMY:
         from hepattn.experiments.clic.pflow_data import CLICDataset  # noqa: PLC0415
-        ds = CLICDataset(filepath="", inputs={"node": ["features"]},
-                         targets={"particle": ["e", "pt", "eta", "sinphi", "cosphi"]},
-                         scale_dict_path=p7.SCALE, num_events=max(BATCHES),
-                         num_objects=p7.NQ, max_nodes=p7.MAX_NODES, dummy_data=True)
+
+        ds = CLICDataset(
+            filepath="",
+            inputs={"node": ["features"]},
+            targets={"particle": ["e", "pt", "eta", "sinphi", "cosphi"]},
+            scale_dict_path=p7.SCALE,
+            num_events=max(BATCHES),
+            num_objects=p7.NQ,
+            max_nodes=p7.MAX_NODES,
+            dummy_data=True,
+        )
         ev = [ds[i] for i in range(max(BATCHES))]
 
         def stack(j):
@@ -235,10 +242,14 @@ def main():
 
         dl = DataLoader(OneBatch(), batch_size=1)
         trainer = L.Trainer(
-            accelerator="gpu" if DEVICE == "cuda" else "cpu", devices=1,
+            accelerator="gpu" if DEVICE == "cuda" else "cpu",
+            devices=1,
             precision="bf16-mixed" if DEVICE == "cuda" else "32",
-            max_epochs=1, logger=False, enable_checkpointing=False,
-            enable_progress_bar=False, enable_model_summary=False,
+            max_epochs=1,
+            logger=False,
+            enable_checkpointing=False,
+            enable_progress_bar=False,
+            enable_model_summary=False,
             num_sanity_val_steps=0,
         )
         t0 = time.perf_counter()
@@ -268,8 +279,7 @@ def main():
         print("  (includes trainer setup amortised over few steps -- treat as an")
         print("   upper bound on Lightning's cost, not a precise figure)")
     except torch.OutOfMemoryError:
-        print(f"  OOM at batch {b} -- AdamW state plus the graph does not fit; "
-              f"rerun with PROF_MAIN_BATCH smaller")
+        print(f"  OOM at batch {b} -- AdamW state plus the graph does not fit; rerun with PROF_MAIN_BATCH smaller")
     except Exception as exc:  # noqa: BLE001
         print(f"  skipped: {type(exc).__name__}: {exc}")
     finally:
@@ -286,8 +296,7 @@ def main():
         print(f"  measured step               {ms:8.1f} ms at batch {b}")
         print(f"  implied epoch (compute only){h:8.2f} h")
         print(f"  reported epoch              {REPORTED_HOURS:8.2f} h")
-        print(f"  unexplained by compute      {REPORTED_HOURS - h:8.2f} h"
-              f"  ({100 * (REPORTED_HOURS - h) / REPORTED_HOURS:.0f}%)")
+        print(f"  unexplained by compute      {REPORTED_HOURS - h:8.2f} h  ({100 * (REPORTED_HOURS - h) / REPORTED_HOURS:.0f}%)")
         print("  The remainder is data loading, optimizer, validation, DDP and Lightning.")
         print("  If it is small, no framework change can win more than that fraction.")
 

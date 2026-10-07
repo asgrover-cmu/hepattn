@@ -173,6 +173,8 @@ class Attention(nn.Module):
                 Must be one of: LayerNorm, RMSNorm, FastLayerNorm, CustomRMSNorm, SimpleRMSNorm, DyT.
             value_residual: Whether to use value residual connections across layers.
             is_first_layer: Whether this is the first layer (for value residual).
+            linformer_proj_dim: Linformer only: projected key/value length.
+            linformer_seq_len: Linformer only: maximum key/value length.
 
         Raises:
             ValueError: If qkv_norm is True but norm is not provided, or if norm type is unsupported.
