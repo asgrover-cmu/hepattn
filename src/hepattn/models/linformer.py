@@ -47,12 +47,13 @@ class LinformerAttention(nn.Module):
 
     def forward(self, q, k=None, v=None, attn_mask=None, **kwargs):
         # print("q.shape", q.shape)
-        b, n, _d, d_h, h, k_num = *q.shape, self.dim_head, self.heads, self.k
+        b, n, _d = q.shape
+        d_h, h, k_num = self.dim_head, self.heads, self.k
 
         kv_len = n if k is None else k.shape[1]
         if k is not None:
             assert v is not None, "v should not be None if k_input is not None"
-        assert k.shape[1] == v.shape[1], f"{k.shape[1]} ?= {v.shape[1]}"
+            assert k.shape[1] == v.shape[1], f"{k.shape[1]} ?= {v.shape[1]}"
         assert kv_len <= self.seq_len, f"the sequence length of the key / values must be {self.seq_len} - {kv_len} given"
 
         queries = self.to_q(q)
