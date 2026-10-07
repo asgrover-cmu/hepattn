@@ -190,8 +190,9 @@ def build_keras_attention(dim: int, attn_type: str = "torch", *, factory: "Layer
     """Dispatch to the keras attention module for the requested backend.
 
     torch/flash/flash-varlen -> KerasAttention (dense-SDPA semantics);
-    linformer -> KerasLinformerAttention (low-rank). Backend-specific kwargs
-    (linformer_seq_len/linformer_proj_dim) are consumed here.
+    linformer -> KerasLinformerAttention (low-rank, projected-space mask, needs k >= kv_len);
+    masked-linformer -> KerasMaskedLinformerAttention (low-rank, exact masks, any k).
+    Backend-specific kwargs (linformer_seq_len/linformer_proj_dim) are consumed here.
     """
     if attn_type == "linformer":
         from hepattn.keras.linformer import KerasLinformerAttention  # noqa: PLC0415  (avoids an import cycle)
@@ -199,4 +200,11 @@ def build_keras_attention(dim: int, attn_type: str = "torch", *, factory: "Layer
         seq_len = attn_kwargs.pop("linformer_seq_len", 256)
         k = attn_kwargs.pop("linformer_proj_dim", 256)
         return KerasLinformerAttention(dim, seq_len=seq_len, k=k, factory=factory, name=name, **attn_kwargs)
+    if attn_type == "masked-linformer":
+        from hepattn.keras.masked_linformer import KerasMaskedLinformerAttention  # noqa: PLC0415  (avoids an import cycle)
+
+        # no defaults: k < seq_len is the point, and seq_len must cover the longest key axis
+        seq_len = attn_kwargs.pop("linformer_seq_len")
+        k = attn_kwargs.pop("linformer_proj_dim")
+        return KerasMaskedLinformerAttention(dim, seq_len=seq_len, k=k, factory=factory, name=name, **attn_kwargs)
     return KerasAttention(dim, attn_type=attn_type, factory=factory, name=name, **attn_kwargs)

@@ -31,9 +31,9 @@ _DEC_STAGE_GROUPS = {
     # B: Q/K/V projections (incl. the linformer sequence projections of K and V)
     "B": [_DEC_ATTN + r"(q_proj|k_proj|v_proj|to_q|to_k|to_v|seqproj_k|seqproj_v)"],
     # C: the two attention contractions, QK^T and attn @ V
-    "C": [_DEC_ATTN + r"(scores|values)"],
+    "C": [_DEC_ATTN + r"(scores|values|mscores|mscoreproj|munproj|mvalues)"],
     # D: the attention softmax
-    "D": [_DEC_ATTN + r"softmax"],
+    "D": [_DEC_ATTN + r"(softmax|msoftmax)"],
     # E: mask-logit path that feeds the next layer's attention mask (task "mask")
     "E": [r"{mask}_.*"],
     # F: every remaining output head (classification, incidence, regression)

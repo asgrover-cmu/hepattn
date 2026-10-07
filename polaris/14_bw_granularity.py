@@ -11,13 +11,16 @@ Variants (datalane quantizers only; weight quantizers are left alone):
     per-last-axis heterogeneous_axis=(-1,) one per channel (per key for attention scores)
     per-layer     heterogeneous_axis=()    one per quantizer
 
-Each is timed under two attention setups (PROF_ATTN=k256|k32|both, default both):
-    k256  the production config: linformer in encoder and decoder with k=256. The sequence
-          is 168 long (160 nodes + 8 register tokens), so k=256 compresses nothing.
-    k32   real compression: encoder linformer with k=32, seq_len=168 (5.25x on the sequence
-          axis); decoder on plain attention, because the linformer applies the decoder's
-          attention mask in projected space and asserts k >= kv_len. This mirrors
-          link32_polaris.yaml on the float side.
+Each is timed under two attention setups (PROF_ATTN=k256|mlin64|both, default both):
+    k256    the production config: linformer in encoder and decoder with k=256. The sequence
+            is 168 long (160 nodes + 8 register tokens), so k=256 compresses nothing.
+    mlin64  masked-linformer in every attention with k=64 (seq_len 168 in the encoder, 160
+            in the decoder), the setup of compressed-maskformer-reco's configs/linformer.yaml.
+            The decoder's mask attention is exact and costs as much as ordinary attention;
+            only its softmax narrows to 64.
+
+The fixed batch is in file order, not phi order. That does not change step time; a real
+training run with masked-linformer needs data.sort_nodes_by: phi.
 
 Timing only: 5 warmup + PROF_ITERS steps on one fixed batch. It says nothing about accuracy.
 
@@ -46,9 +49,11 @@ TRAIN_EVENTS = 994_400
 
 ATTN = {
     "k256": None,  # p7's ENCODER / DECODER as they are
-    "k32": (
-        {**p7.ENCODER, "attn_kwargs": {"num_heads": 16, "linformer_seq_len": 168, "linformer_proj_dim": 32}},
-        {**p7.DECODER, "decoder_layer_config": {"dim": p7.DIM, "hybrid_norm": True, "attn_kwargs": {"num_heads": 16}}},
+    "mlin64": (
+        {**p7.ENCODER, "attn_type": "masked-linformer",
+         "attn_kwargs": {"num_heads": 16, "linformer_seq_len": 168, "linformer_proj_dim": 64}},
+        {**p7.DECODER, "decoder_layer_config": {"dim": p7.DIM, "hybrid_norm": True, "attn_kwargs": {
+            "num_heads": 16, "attn_type": "masked-linformer", "linformer_seq_len": 160, "linformer_proj_dim": 64}}},
     ),
 }
 _PROD = (p7.ENCODER, p7.DECODER)

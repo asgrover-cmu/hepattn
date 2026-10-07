@@ -23,7 +23,7 @@ from hepattn.keras.factory import LayerFactory
 from hepattn.models.encoder import Residual
 from hepattn.models.norm import get_hybrid_norm_config
 
-ALLOWED_ATTN_TYPES = {"torch", "flash", "flash-varlen", "linformer"}
+ALLOWED_ATTN_TYPES = {"torch", "flash", "flash-varlen", "linformer", "masked-linformer"}
 # flash/flash-varlen are coerced to torch (identical math on the dense-mask path);
 # linformer is a distinct backend (KerasLinformerAttention) and is kept as-is.
 COERCE_TO_TORCH = {"flash", "flash-varlen"}
