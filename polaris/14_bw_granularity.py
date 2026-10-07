@@ -11,6 +11,14 @@ Variants (datalane quantizers only; weight quantizers are left alone):
     per-last-axis heterogeneous_axis=(-1,) one per channel (per key for attention scores)
     per-layer     heterogeneous_axis=()    one per quantizer
 
+Each is timed under two attention setups (PROF_ATTN=k256|k32|both, default both):
+    k256  the production config: linformer in encoder and decoder with k=256. The sequence
+          is 168 long (160 nodes + 8 register tokens), so k=256 compresses nothing.
+    k32   real compression: encoder linformer with k=32, seq_len=168 (5.25x on the sequence
+          axis); decoder on plain attention, because the linformer applies the decoder's
+          attention mask in projected space and asserts k >= kv_len. This mirrors
+          link32_polaris.yaml on the float side.
+
 Timing only: 5 warmup + PROF_ITERS steps on one fixed batch. It says nothing about accuracy.
 
     DATA_ROOT=/path/to/clic PYTHONPATH=src python polaris/14_bw_granularity.py
@@ -35,6 +43,17 @@ ITERS = int(os.environ.get("PROF_ITERS", "12"))
 WARMUP = 5
 BATCHES = tuple(int(x) for x in os.environ.get("PROF_BATCHES", "32,64").split(","))
 TRAIN_EVENTS = 994_400
+
+ATTN = {
+    "k256": None,  # p7's ENCODER / DECODER as they are
+    "k32": (
+        {**p7.ENCODER, "attn_kwargs": {"num_heads": 16, "linformer_seq_len": 168, "linformer_proj_dim": 32}},
+        {**p7.DECODER, "decoder_layer_config": {"dim": p7.DIM, "hybrid_norm": True, "attn_kwargs": {"num_heads": 16}}},
+    ),
+}
+_PROD = (p7.ENCODER, p7.DECODER)
+ATTN_SEL = os.environ.get("PROF_ATTN", "both")
+ATTN_RUN = list(ATTN) if ATTN_SEL == "both" else [ATTN_SEL]
 
 VARIANTS = {
     "per-element (default)": {},
@@ -68,7 +87,9 @@ def main() -> None:
     inp_all, tgt_all = p7.get_batch()
     have = next(iter(inp_all.values())).shape[0]
     rows = []
-    for tag, extra in VARIANTS.items():
+    for attn, (gran, extra) in ((a, v) for a in ATTN_RUN for v in VARIANTS.items()):
+        p7.ENCODER, p7.DECODER = ATTN[attn] or _PROD  # p7.build() reads these module globals
+        tag = f"{attn} {gran}"
         for b in BATCHES:
             if b > have:
                 print(f"[{tag}] batch {b}: only {have} events loaded, skipped", flush=True)
@@ -89,21 +110,22 @@ def main() -> None:
                 gb = torch.cuda.max_memory_allocated() / 2**30
                 hours = TRAIN_EVENTS / b * ms / 1e3 / 3600
                 rows.append((tag, b, n_w, n_q, ms, ms / b, gb, hours))
-                print(f"[{tag:22s}] batch {b:3d}  weights {n_w / 1e6:6.2f}M  quantizer {n_q / 1e6:7.3f}M  "
+                print(f"[{tag:28s}] batch {b:3d}  weights {n_w / 1e6:6.2f}M  quantizer {n_q / 1e6:7.3f}M  "
                       f"{ms:8.1f} ms/step  {ms / b:6.2f} ms/event  {gb:5.1f} GB  ~{hours:5.2f} h/epoch(1 GPU)", flush=True)
             except torch.OutOfMemoryError:
-                print(f"[{tag:22s}] batch {b:3d}  OUT OF MEMORY", flush=True)
+                print(f"[{tag:28s}] batch {b:3d}  OUT OF MEMORY", flush=True)
             except Exception as e:  # a variant HGQ2 rejects must not hide the others
-                print(f"[{tag:22s}] batch {b:3d}  FAILED: {type(e).__name__}: {e}", flush=True)
+                print(f"[{tag:28s}] batch {b:3d}  FAILED: {type(e).__name__}: {e}", flush=True)
             finally:
                 del model
                 torch.cuda.empty_cache()
 
-    base = {b: ms for tag, b, *_, ms, _pe, _gb, _h in rows if tag.startswith("per-element")}
-    print("\nspeedup vs per-element at the same batch (step time only, no accuracy claim):")
+    ref = f"{ATTN_RUN[0]} per-element"
+    base = {b: ms for tag, b, _nw, _nq, ms, *_ in rows if tag.startswith(ref)}
+    print(f"\nspeedup vs '{ref}' at the same batch (step time only, no accuracy claim):")
     for tag, b, _nw, _nq, ms, *_ in rows:
-        if b in base and not tag.startswith("per-element"):
-            print(f"  {tag:22s} batch {b:3d}  {base[b] / ms:5.2f}x")
+        if b in base and not tag.startswith(ref):
+            print(f"  {tag:28s} batch {b:3d}  {base[b] / ms:5.2f}x")
     print("BWGRAN-DONE")
 
 
