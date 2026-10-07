@@ -119,7 +119,7 @@ def main() -> None:
                       f"{ms:8.1f} ms/step  {ms / b:6.2f} ms/event  {gb:5.1f} GB  ~{hours:5.2f} h/epoch(1 GPU)", flush=True)
             except torch.OutOfMemoryError:
                 print(f"[{tag:28s}] batch {b:3d}  OUT OF MEMORY", flush=True)
-            except Exception as e:  # a variant HGQ2 rejects must not hide the others
+            except (RuntimeError, ValueError, TypeError, KeyError, AssertionError) as e:  # a variant HGQ2 rejects must not hide the others
                 print(f"[{tag:28s}] batch {b:3d}  FAILED: {type(e).__name__}: {e}", flush=True)
             finally:
                 del model
