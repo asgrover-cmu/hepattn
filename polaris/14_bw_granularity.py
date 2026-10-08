@@ -19,6 +19,11 @@ Each is timed under two attention setups (PROF_ATTN=k256|mlin64|both, default bo
             The decoder's mask attention is exact and costs as much as ordinary attention;
             only its softmax narrows to 64.
 
+Two controls separate what changed between those two (PROF_ATTN takes a comma list, or "all"):
+    mlin256 masked-linformer with k=256: the new implementation without compression. Against
+            mlin64 it isolates the effect of k; against k256, the effect of the implementation.
+    plain   ordinary attention in encoder and decoder, no sequence projection at all.
+
 The fixed batch is in file order, not phi order. That does not change step time; a real
 training run with masked-linformer needs data.sort_nodes_by: phi.
 
@@ -47,23 +52,30 @@ WARMUP = 5
 BATCHES = tuple(int(x) for x in os.environ.get("PROF_BATCHES", "32,64").split(","))
 TRAIN_EVENTS = 994_400
 
+
+def _mlin(k: int) -> tuple[dict, dict]:
+    """masked-linformer in every attention with projection rank k (seq_len 168 encoder, 160 decoder)."""
+    enc = {"num_heads": 16, "linformer_seq_len": 168, "linformer_proj_dim": k}
+    dec = {"num_heads": 16, "attn_type": "masked-linformer", "linformer_seq_len": 160, "linformer_proj_dim": k}
+    return (
+        {**p7.ENCODER, "attn_type": "masked-linformer", "attn_kwargs": enc},
+        {**p7.DECODER, "decoder_layer_config": {"dim": p7.DIM, "hybrid_norm": True, "attn_kwargs": dec}},
+    )
+
+
 ATTN = {
     "k256": None,  # p7's ENCODER / DECODER as they are
-    "mlin64": (
-        {**p7.ENCODER, "attn_type": "masked-linformer", "attn_kwargs": {"num_heads": 16, "linformer_seq_len": 168, "linformer_proj_dim": 64}},
-        {
-            **p7.DECODER,
-            "decoder_layer_config": {
-                "dim": p7.DIM,
-                "hybrid_norm": True,
-                "attn_kwargs": {"num_heads": 16, "attn_type": "masked-linformer", "linformer_seq_len": 160, "linformer_proj_dim": 64},
-            },
-        },
+    "mlin64": _mlin(64),
+    "mlin256": _mlin(256),
+    "plain": (
+        {**p7.ENCODER, "attn_type": "torch", "attn_kwargs": {"num_heads": 16}},
+        {**p7.DECODER, "decoder_layer_config": {"dim": p7.DIM, "hybrid_norm": True, "attn_kwargs": {"num_heads": 16}}},
     ),
 }
 _PROD = (p7.ENCODER, p7.DECODER)
 ATTN_SEL = os.environ.get("PROF_ATTN", "both")
-ATTN_RUN = list(ATTN) if ATTN_SEL == "both" else [ATTN_SEL]
+# "both" keeps its original meaning (the two setups of the first study); "all" adds the controls
+ATTN_RUN = {"both": ["k256", "mlin64"], "all": list(ATTN)}.get(ATTN_SEL) or ATTN_SEL.split(",")
 
 VARIANTS = {
     "per-element (default)": {},
