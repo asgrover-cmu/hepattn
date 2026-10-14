@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Run commands on a held Polaris compute node from a login node, with no interactive qsub -I.
+# Login nodes hit thread limits (pthread_create / Errno 11) on pixi, numpy, pytest, git-lfs.
+#
+#   polaris/onnode start [queue] [walltime]   hold a node (default: debug 01:00:00)
+#   polaris/onnode status                     show the held job and node
+#   polaris/onnode <command...>               run <command> on the node, in the current directory
+#   polaris/onnode stop                       release the node (it is charged while held)
+#
+# Examples:
+#   polaris/onnode start preemptable 04:00:00
+#   polaris/onnode pytest tests/experiments/clic/test_node_sort.py -q
+#   polaris/onnode python -c "import hepattn; print(hepattn.__file__)"
+#
+# Commands run with polaris/env.sh sourced (if present), VENV_DIR/bin first on PATH, and
+# PYTHONNOUSERSITE=1. Long runs still go through submit_train.sh / submit_linformer.sh.
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+STATE="${HOME}/.onnode"
+[ -f "${REPO_DIR}/polaris/env.sh" ] && source "${REPO_DIR}/polaris/env.sh"
+
+held_job() {
+  [ -f "${STATE}" ] || return 1
+  read -r JOB NODE < "${STATE}"
+  qstat -f "${JOB}" 2>/dev/null | grep -q "job_state = R" || { rm -f "${STATE}"; return 1; }
+}
+
+case "${1:-}" in
+  "" | -h | --help)
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  start)
+    if held_job; then echo "already holding ${NODE} (${JOB})"; exit 0; fi
+    JOB="$(qsub -A "${PBS_PROJECT:-hgcal-maskformer-fpga}" \
+      -q "${2:-debug}" \
+      -l "walltime=${3:-01:00:00}" \
+      -l "filesystems=${PBS_FILESYSTEMS:-eagle:home}" \
+      -o "${HOME}/onnode_hold.log" \
+      "${REPO_DIR}/polaris/hold_node.pbs")"
+    echo "submitted ${JOB}, waiting for it to start (ctrl-c is safe, check with: polaris/onnode status)"
+    until held_job; do sleep 10; done
+    echo "holding ${NODE} (${JOB})"
+    ;;
+  status)
+    if held_job; then
+      echo "holding ${NODE} (${JOB})"
+      qstat -f "${JOB}" | grep -E "queue =|Walltime|walltime ="
+    else
+      echo "no node held"
+      qstat -u "${USER}" | grep onnode || true
+    fi
+    ;;
+  stop)
+    if held_job; then qdel "${JOB}" && rm -f "${STATE}" && echo "released ${NODE} (${JOB})"; else echo "no node held"; fi
+    ;;
+  *)
+    held_job || { echo "no node held: run polaris/onnode start" >&2; exit 1; }
+    REMOTE="cd $(printf %q "${PWD}")"
+    REMOTE+=" && { [ ! -f $(printf %q "${REPO_DIR}/polaris/env.sh") ] || source $(printf %q "${REPO_DIR}/polaris/env.sh"); }"
+    REMOTE+=' && export PYTHONNOUSERSITE=1 && { [ -z "${VENV_DIR:-}" ] || export PATH="${VENV_DIR}/bin:${PATH}"; }'
+    REMOTE+=" && $(printf '%q ' "$@")"
+    exec ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${NODE}" "bash -lc $(printf %q "${REMOTE}")"
+    ;;
+esac

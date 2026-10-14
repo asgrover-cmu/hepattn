@@ -1,0 +1,20 @@
+#!/bin/bash -l
+#PBS -N onnode
+#PBS -l select=1:system=polaris
+#PBS -l place=scatter
+#PBS -j oe
+#
+# Holds one compute node idle so polaris/onnode can run commands on it over ssh.
+# Submit with `polaris/onnode start`, which injects -A / -q / -l walltime / -l filesystems / -o.
+# The node is charged to the allocation the whole time it is held: `polaris/onnode stop` when done.
+
+set -euo pipefail
+
+STATE="${HOME}/.onnode"
+echo "${PBS_JOBID} $(hostname)" > "${STATE}"
+cleanup() { grep -q "^${PBS_JOBID} " "${STATE}" 2>/dev/null && rm -f "${STATE}"; }
+trap cleanup EXIT TERM
+
+echo "holding $(hostname) as ${PBS_JOBID} since $(date)"
+sleep infinity &
+wait $!
