@@ -95,16 +95,23 @@ MAX_EPOCHS="$(grep -m1 '^  max_epochs:' "${CONFIG}" | awk '{print $2}')"
 BASE="$(dirname "$(dirname "${CONFIG}")")"
 EXTRA_ARGS=(--name "${NAME}")
 
-# Smoke: train 1 short epoch, then resume that checkpoint for a 2nd epoch. Exercises compile,
-# DDP, validation, checkpoint writing, Comet upload, and the --ckpt_path resume path.
+# Smoke: train 2 short epochs, then resume from the epoch-0 checkpoint and redo epoch 1.
+# Exercises compile, DDP, validation, checkpoint writing, Comet upload, and the --ckpt_path
+# resume path. max_epochs must be the same in both phases, as it is for a real resume:
+# OneCycleLR's total_steps (estimated_stepping_batches) is restored from the checkpoint, so
+# resuming with a larger max_epochs dies with "Tried to step 31 times" (smoke job 7760709).
 if [ "${SMOKE}" = "1" ]; then
-  SMOKE_ARGS=(--name "${NAME}" --trainer.limit_train_batches 30 --trainer.limit_val_batches 5)
-  "${PY}" main.py fit --config "${CONFIG}" "${SMOKE_ARGS[@]}" --trainer.max_epochs 1 || die "smoke epoch 1 failed"
-  CK=$(ls -1t "${BASE}/${NAME}"_2*/ckpts/epoch=000-*.ckpt 2>/dev/null | head -1)
-  [ -n "${CK}" ] || die "smoke wrote no checkpoint"
+  SMOKE_ARGS=(--name "${NAME}" --trainer.max_epochs 2 --trainer.limit_train_batches 30 --trainer.limit_val_batches 5)
+  "${PY}" main.py fit --config "${CONFIG}" "${SMOKE_ARGS[@]}" || die "smoke training failed"
+  RUN1=$(ls -1td "${BASE}/${NAME}"_2* | head -1)
+  CK=$(ls -1 "${RUN1}"/ckpts/epoch=000-*.ckpt 2>/dev/null | head -1)
+  [ -n "${CK}" ] || die "smoke wrote no epoch=000 checkpoint in ${RUN1}"
+  ls -1 "${RUN1}"/ckpts/epoch=001-*.ckpt >/dev/null 2>&1 || die "smoke wrote no epoch=001 checkpoint in ${RUN1}"
   echo "smoke checkpoint: ${CK}"
-  "${PY}" main.py fit --config "${CONFIG}" "${SMOKE_ARGS[@]}" --trainer.max_epochs 2 --ckpt_path "${CK}" || die "smoke resume failed"
-  ls -1 "${BASE}/${NAME}"_2*/ckpts/epoch=001-*.ckpt >/dev/null 2>&1 || die "smoke resume wrote no epoch=001 checkpoint"
+  "${PY}" main.py fit --config "${CONFIG}" "${SMOKE_ARGS[@]}" --ckpt_path "${CK}" || die "smoke resume failed"
+  RUN2=$(ls -1td "${BASE}/${NAME}"_2* | head -1)
+  [ "${RUN2}" != "${RUN1}" ] || die "smoke resume made no new run dir"
+  ls -1 "${RUN2}"/ckpts/epoch=001-*.ckpt >/dev/null 2>&1 || die "smoke resume wrote no epoch=001 checkpoint in ${RUN2}"
   echo "SMOKE PASSED"
   echo "Exit: 0  End: $(date)"; rm -rf "${SCRATCH}"; exit 0
 fi
