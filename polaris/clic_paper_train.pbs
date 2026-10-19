@@ -1,0 +1,144 @@
+#!/bin/bash -l
+#PBS -N clic-paper
+#PBS -A hgcal-maskformer-fpga
+#PBS -l select=1:ngpus=4:ncpus=64
+#PBS -l place=scatter
+#PBS -l filesystems=eagle:home
+#PBS -r y
+#PBS -j oe
+#
+# Train a CLIC paper-tag (clic-paper, fb90390) config on one Polaris node, crash-proofed.
+# Submit with polaris/submit_clic_paper.sh, which passes CONFIG / SMOKE / CHAIN_LEFT via -v
+# and sets -q, -l walltime and -o.
+#
+# Every guard below exists because a run died of it:
+#   - Triton/Inductor compiled with NVHPC nvc ("nvc-Error-Unknown switch: -Wno-psabi"):
+#     job 7719013 died in the sanity check. CC/CXX are pinned to the pixi gcc, and a real
+#     torch.compile kernel is built on the GPU before training starts.
+#   - The old script ended with `echo`, so PBS reported Exit_status 0 for a crashed run.
+#     This script exits with the trainer's status.
+#   - Triton caches in ~ filled the 45 GB home quota: caches go to node-local /var/tmp.
+#   - Batch jobs do not inherit the proxy, and Comet uploads every checkpoint.
+#   - Preemption / walltime: -r y requeues on preemption, every start resumes from the newest
+#     readable epoch checkpoint of this run name, and a follow-up job (afterany) is queued so
+#     a walltime kill continues too. CHAIN_LEFT caps the follow-ups.
+
+set -uo pipefail
+
+CONFIG="${CONFIG:?CONFIG not set (submit with polaris/submit_clic_paper.sh)}"
+SMOKE="${SMOKE:-0}"
+CHAIN_LEFT="${CHAIN_LEFT:-0}"
+REPO="${REPO:-/home/akum/hepattn-clic-paper}"
+ENV_DIR="${ENV_DIR:-${REPO}/.pixi/envs/default}"
+EXTRA_PKGS="${EXTRA_PKGS:-/eagle/hgcal-maskformer-fpga/akum_pixi/extra_pkgs}"
+CLIC_DIR="${REPO}/src/hepattn/experiments/clic"
+SCRIPT="${SCRIPT:?SCRIPT not set (absolute path of this file, for follow-up jobs)}"
+
+die() { echo "FATAL: $*" >&2; echo "Exit: 2  End: $(date)"; exit 2; }
+echo "Host: $(hostname)  Start: $(date)  Job: ${PBS_JOBID:-none}  Smoke: ${SMOKE}  Chain left: ${CHAIN_LEFT}"
+echo "Config: ${CONFIG}"
+nvidia-smi --query-gpu=index,name,memory.used --format=csv
+
+# ---- environment -----------------------------------------------------------------------
+PROXY="http://proxy.alcf.anl.gov:3128"
+export http_proxy="${PROXY}" https_proxy="${PROXY}" HTTP_PROXY="${PROXY}" HTTPS_PROXY="${PROXY}"
+export PYTHONNOUSERSITE=1
+export PATH="${ENV_DIR}/bin:${PATH}"
+export PYTHONPATH="${EXTRA_PKGS}:${REPO}/src"
+export CC="${ENV_DIR}/bin/x86_64-conda-linux-gnu-gcc"
+export CXX="${ENV_DIR}/bin/x86_64-conda-linux-gnu-g++"
+SCRATCH="/var/tmp/${USER}_${PBS_JOBID:-$$}"
+mkdir -p "${SCRATCH}"
+export TMPDIR="${SCRATCH}" TRITON_CACHE_DIR="${SCRATCH}/triton" TORCHINDUCTOR_CACHE_DIR="${SCRATCH}/inductor"
+PY="${ENV_DIR}/bin/python"
+
+# ---- preflight: fail in seconds, not after the queue wait --------------------------------
+[ -x "${PY}" ] || die "no python at ${PY}"
+[ -x "${CC}" ] && [ -x "${CXX}" ] || die "pixi gcc/g++ missing: ${CC} ${CXX}"
+"${CC}" --version | head -1 | grep -qi gcc || die "${CC} is not gcc"
+[ -f "${CONFIG}" ] || die "no config at ${CONFIG}"
+cd "${CLIC_DIR}" || die "no ${CLIC_DIR}"
+
+"${PY}" - "${CONFIG}" "${REPO}" <<'PYCHK' || die "preflight failed (see above)"
+import os, shutil, sys
+import yaml
+cfg_path, repo = sys.argv[1], sys.argv[2]
+cfg = yaml.safe_load(open(cfg_path))
+
+import hepattn, torch, lightning, flash_attn  # noqa: F401
+assert hepattn.__file__.startswith(os.path.join(repo, "src")), f"hepattn resolves to {hepattn.__file__}"
+print("hepattn", hepattn.__file__, "| torch", torch.__version__, "| lightning", lightning.__version__)
+
+for k in ("train_path", "valid_path"):
+    assert os.path.isfile(cfg["data"][k]), f"data.{k} missing: {cfg['data'][k]}"
+root = os.path.dirname(cfg["trainer"]["default_root_dir"].rstrip("/"))
+assert root.startswith("/eagle/") or root.startswith("/lus/eagle/"), f"default_root_dir not on eagle: {root}"
+free_gb = shutil.disk_usage(root).free / 1e9
+assert free_gb > 100, f"only {free_gb:.0f} GB free under {root}"
+assert torch.cuda.device_count() == cfg["trainer"]["devices"], (
+    f"{torch.cuda.device_count()} GPUs visible, config wants {cfg['trainer']['devices']}")
+
+# The exact path that killed job 7719013: Inductor -> Triton kernel -> C launcher built with $CC.
+f = torch.compile(lambda x: torch.nn.functional.silu(x) * 2 + 1)
+y = f(torch.randn(1024, device="cuda"))
+torch.cuda.synchronize()
+print("torch.compile + triton launcher OK with CC =", os.environ["CC"], "| sum", float(y.sum()))
+PYCHK
+
+HOME_USED=$(df -P "${HOME}" | awk 'NR==2{print $5}' | tr -d %)
+echo "home filesystem use: ${HOME_USED}%"
+
+# ---- resume: newest readable checkpoint of this run name --------------------------------
+NAME="$(grep -m1 '^name:' "${CONFIG}" | awk '{print $2}')"
+[ "${SMOKE}" = "1" ] && NAME="${NAME}_smoke"
+MAX_EPOCHS="$(grep -m1 '^  max_epochs:' "${CONFIG}" | awk '{print $2}')"
+BASE="$(dirname "$(dirname "${CONFIG}")")"
+EXTRA_ARGS=(--name "${NAME}")
+
+# Smoke: train 1 short epoch, then resume that checkpoint for a 2nd epoch. Exercises compile,
+# DDP, validation, checkpoint writing, Comet upload, and the --ckpt_path resume path.
+if [ "${SMOKE}" = "1" ]; then
+  SMOKE_ARGS=(--name "${NAME}" --trainer.limit_train_batches 30 --trainer.limit_val_batches 5)
+  "${PY}" main.py fit --config "${CONFIG}" "${SMOKE_ARGS[@]}" --trainer.max_epochs 1 || die "smoke epoch 1 failed"
+  CK=$(ls -1t "${BASE}/${NAME}"_2*/ckpts/epoch=000-*.ckpt 2>/dev/null | head -1)
+  [ -n "${CK}" ] || die "smoke wrote no checkpoint"
+  echo "smoke checkpoint: ${CK}"
+  "${PY}" main.py fit --config "${CONFIG}" "${SMOKE_ARGS[@]}" --trainer.max_epochs 2 --ckpt_path "${CK}" || die "smoke resume failed"
+  ls -1 "${BASE}/${NAME}"_2*/ckpts/epoch=001-*.ckpt >/dev/null 2>&1 || die "smoke resume wrote no epoch=001 checkpoint"
+  echo "SMOKE PASSED"
+  echo "Exit: 0  End: $(date)"; rm -rf "${SCRATCH}"; exit 0
+fi
+
+RESUME=""
+for ck in $(ls -1 "${BASE}/${NAME}"_2*/ckpts/epoch=*.ckpt 2>/dev/null | awk -F/ '{print $NF" "$0}' | sort -r | cut -d' ' -f2); do
+  if "${PY}" -c "import sys,torch; torch.load(sys.argv[1], map_location='cpu', weights_only=False)" "${ck}" 2>/dev/null; then
+    RESUME="${ck}"; break
+  fi
+  echo "skipping unreadable checkpoint ${ck}"
+done
+if [ -n "${RESUME}" ]; then
+  DONE_EPOCH=$(basename "${RESUME}" | sed -E 's/^epoch=0*([0-9]+)-.*/\1/')
+  if [ "$((DONE_EPOCH + 1))" -ge "${MAX_EPOCHS}" ]; then
+    echo "Already finished: ${RESUME} is epoch ${DONE_EPOCH} of ${MAX_EPOCHS}. Nothing to do."
+    echo "Exit: 0  End: $(date)"; exit 0
+  fi
+  echo "Resuming from ${RESUME} (epoch ${DONE_EPOCH})"
+  EXTRA_ARGS+=(--ckpt_path "${RESUME}")
+fi
+
+# ---- follow-up job so a walltime kill also resumes ----------------------------------------
+if [ "${CHAIN_LEFT}" -gt 0 ] && [ -n "${PBS_JOBID:-}" ]; then
+  NEXT=$(qsub -W "depend=afterany:${PBS_JOBID}" -q "${PBS_QUEUE}" \
+    -l "walltime=${WALLTIME:?}" -N "${PBS_JOBNAME:-clic-paper}" \
+    -o "$(dirname "${CONFIG}")/train_chain$((CHAIN_LEFT - 1))_$(date +%Y%m%d-%H%M%S).log" \
+    -v "CONFIG=${CONFIG},SMOKE=${SMOKE},CHAIN_LEFT=$((CHAIN_LEFT - 1)),WALLTIME=${WALLTIME},REPO=${REPO},SCRIPT=${SCRIPT}" \
+    "${SCRIPT}") && echo "Queued follow-up ${NEXT} (runs after this job, exits at once if training finished)"
+fi
+
+# ---- train ------------------------------------------------------------------------------
+echo "Running: python main.py fit --config ${CONFIG} ${EXTRA_ARGS[*]}"
+"${PY}" main.py fit --config "${CONFIG}" "${EXTRA_ARGS[@]}"
+RC=$?
+echo "Exit: ${RC}  End: $(date)"
+rm -rf "${SCRATCH}"
+exit "${RC}"
