@@ -5,7 +5,8 @@
 #   CONFIG=/eagle/.../<run>/config.yaml bash polaris/submit_clic_paper.sh           # preemptable, 25 h
 #
 # Optional env: QUEUE, WALLTIME (hh:mm:ss), CHAIN_LEFT (follow-up jobs after preemption or
-# walltime, default 2), REPO (paper-tag checkout, default /home/akum/hepattn-clic-paper).
+# walltime, default 2), REPO (paper-tag checkout, default /home/akum/hepattn-clic-paper),
+# AFTER_OK=<smoke job id> (start only if that job exits 0; PBS deletes this job otherwise).
 # Always run the smoke first: it trains, checkpoints and resumes in the real environment.
 # NEVER put a trailing comment on a #PBS line -- qsub parses the rest as args.
 set -euo pipefail
@@ -24,7 +25,10 @@ else
   QUEUE="${QUEUE:-preemptable}"; WALLTIME="${WALLTIME:-25:00:00}"; CHAIN_LEFT="${CHAIN_LEFT:-2}"; LOG="${RUN_DIR}/train_$(date +%Y%m%d-%H%M%S).log"
 fi
 
-JOB=$(qsub -q "${QUEUE}" -l "walltime=${WALLTIME}" -N "${NAME:0:15}" -o "${LOG}" \
+DEP_ARGS=()
+[ -n "${AFTER_OK:-}" ] && DEP_ARGS=(-W "depend=afterok:${AFTER_OK}")
+
+JOB=$(qsub "${DEP_ARGS[@]}" -q "${QUEUE}" -l "walltime=${WALLTIME}" -N "${NAME:0:15}" -o "${LOG}" \
   -v "CONFIG=${CONFIG},SMOKE=${SMOKE:-0},CHAIN_LEFT=${CHAIN_LEFT},WALLTIME=${WALLTIME},REPO=${REPO},SCRIPT=${HERE}/clic_paper_train.pbs" \
   "${HERE}/clic_paper_train.pbs")
 echo "submitted ${JOB}  queue=${QUEUE}  walltime=${WALLTIME}  chain=${CHAIN_LEFT}"
